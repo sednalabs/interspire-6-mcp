@@ -69,7 +69,8 @@ Apply:
 - requires `INTERSPIRE_QUEUE_WRITE_CONTROLS=1`;
 - requires the exact plan id and action from preview;
 - re-reads the Schedule page before apply;
-- applies only the matching cancel/delete route;
+- applies only the matching Schedule cancel route or one-job Schedule delete
+  form post;
 - re-reads the Schedule page after apply;
 - returns before/after counts and evidence.
 

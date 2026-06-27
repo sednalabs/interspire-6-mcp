@@ -179,7 +179,8 @@ All write paths use the same safety pattern:
 
 Queue apply remains limited to Schedule-page cancel/delete actions.
 
-The apply route is limited to Interspire Schedule-page cancel/delete actions.
+The apply route is limited to Interspire Schedule-page cancel actions and the
+built-in Schedule delete form for one selected job.
 It does not send, schedule, import, export, edit contacts, edit suppressions,
 change provider APIs, DNS, or secrets, or authorize any later send.
 

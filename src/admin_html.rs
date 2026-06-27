@@ -54,6 +54,26 @@ struct QueueControlLink {
     candidate: QueueControlCandidate,
     route: QueueControlRoute,
     url: Url,
+    execution: QueueControlExecution,
+}
+
+#[derive(Debug, Clone)]
+enum QueueControlExecution {
+    Get,
+    DeletePost {
+        checkbox_name: String,
+        submit_name: String,
+        submit_value: String,
+        hidden_pairs: Vec<(String, String)>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct QueueDeleteForm {
+    url: Url,
+    submit_name: String,
+    submit_value: String,
+    hidden_pairs: Vec<(String, String)>,
 }
 
 impl AdminHtmlClient {
@@ -248,11 +268,29 @@ impl AdminHtmlClient {
                 )
             })?;
 
-        let response = self
-            .http
-            .get(selected.url.clone())
-            .send()
-            .map_err(|err| InterspireError::Http(err.to_string()))?;
+        let response = match &selected.execution {
+            QueueControlExecution::Get => self
+                .http
+                .get(selected.url.clone())
+                .send()
+                .map_err(|err| InterspireError::Http(err.to_string()))?,
+            QueueControlExecution::DeletePost {
+                checkbox_name,
+                submit_name,
+                submit_value,
+                hidden_pairs,
+            } => {
+                let identifier_value = selected.route.identifier_value.to_string();
+                let mut post_pairs = hidden_pairs.clone();
+                post_pairs.push((checkbox_name.clone(), identifier_value));
+                post_pairs.push((submit_name.clone(), submit_value.clone()));
+                self.http
+                    .post(selected.url.clone())
+                    .form(&post_pairs)
+                    .send()
+                    .map_err(|err| InterspireError::Http(err.to_string()))?
+            }
+        };
         let status = response.status();
         if !status.is_success() && !status.is_redirection() {
             return Err(InterspireError::Http(format!(
@@ -721,6 +759,7 @@ fn parse_queue_control_links(
         Selector::parse("tr").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
     let link_selector =
         Selector::parse("a").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
+    let delete_form = parse_schedule_delete_form(base_url, &document)?;
     let mut links = Vec::new();
     let mut inspected_rows = 0usize;
 
@@ -734,6 +773,7 @@ fn parse_queue_control_links(
             break;
         }
         let row_summary = redact::redact_sensitive_text(&row_text);
+        let row_checkbox = extract_row_checkbox(&row)?;
         for link in row.select(&link_selector) {
             let action_label = compact_text(&link.text().collect::<Vec<_>>().join(" "));
             if !looks_like_queue_control_label(&action_label) {
@@ -742,10 +782,15 @@ fn parse_queue_control_links(
             let Some(href) = link.value().attr("href") else {
                 continue;
             };
-            let Ok((url, route)) = safety::ensure_allowed_queue_control(base_url, href) else {
+            let Some((url, route, execution, route_key)) = parse_queue_control_link_target(
+                base_url,
+                href,
+                row_checkbox.as_ref(),
+                delete_form.as_ref(),
+            )?
+            else {
                 continue;
             };
-            let route_key = route_key(&url);
             let plan_id = guarded_write::stable_plan_id(&[
                 route.action.as_str(),
                 &route.identifier_key,
@@ -764,11 +809,144 @@ fn parse_queue_control_links(
                 },
                 route,
                 url,
+                execution,
             });
         }
     }
 
     Ok(links)
+}
+
+fn parse_queue_control_link_target(
+    base_url: &str,
+    href: &str,
+    row_checkbox: Option<&(String, u64)>,
+    delete_form: Option<&QueueDeleteForm>,
+) -> Result<Option<(Url, QueueControlRoute, QueueControlExecution, String)>, InterspireError> {
+    if let Ok((url, route)) = safety::ensure_allowed_queue_control(base_url, href) {
+        let route_key = route_key(&url);
+        return Ok(Some((url, route, QueueControlExecution::Get, route_key)));
+    }
+
+    let Some(delete_form) = delete_form else {
+        return Ok(None);
+    };
+    let Some((checkbox_name, checkbox_value)) = row_checkbox else {
+        return Ok(None);
+    };
+    let Some(confirm_delete_job) = parse_confirm_delete_job(href) else {
+        return Ok(None);
+    };
+    if confirm_delete_job != *checkbox_value {
+        return Ok(None);
+    }
+
+    let route = QueueControlRoute {
+        action: QueueControlAction::Delete,
+        identifier_key: checkbox_name.clone(),
+        identifier_value: confirm_delete_job,
+    };
+    let route_key = format!(
+        "{}#{}={}",
+        route_key(&delete_form.url),
+        checkbox_name,
+        confirm_delete_job
+    );
+    Ok(Some((
+        delete_form.url.clone(),
+        route,
+        QueueControlExecution::DeletePost {
+            checkbox_name: checkbox_name.clone(),
+            submit_name: delete_form.submit_name.clone(),
+            submit_value: delete_form.submit_value.clone(),
+            hidden_pairs: delete_form.hidden_pairs.clone(),
+        },
+        route_key,
+    )))
+}
+
+fn parse_schedule_delete_form(
+    base_url: &str,
+    document: &Html,
+) -> Result<Option<QueueDeleteForm>, InterspireError> {
+    let form_selector = Selector::parse("form[name=\"schedulesform\"]")
+        .map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
+    let input_selector =
+        Selector::parse("input").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
+
+    for form in document.select(&form_selector) {
+        let Some(action) = form.value().attr("action") else {
+            continue;
+        };
+        let Ok(url) = safety::ensure_allowed_queue_control_delete_post(base_url, action) else {
+            continue;
+        };
+        let submit = form.select(&input_selector).find(|input| {
+            input
+                .value()
+                .attr("type")
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("submit"))
+                && input.value().attr("name").is_some()
+        });
+        let submit_name = submit
+            .and_then(|input| input.value().attr("name"))
+            .unwrap_or("DeleteSchedulesButton")
+            .to_string();
+        let submit_value = submit
+            .and_then(|input| input.value().attr("value"))
+            .unwrap_or("Delete Selected")
+            .to_string();
+        let hidden_pairs = forms::parse_form_controls(&form)
+            .into_iter()
+            .filter(|control| matches!(control.kind, forms::FormControlKind::Hidden))
+            .filter(forms::should_replay_hidden_control)
+            .map(|control| (control.original_name, control.value))
+            .collect::<Vec<_>>();
+        return Ok(Some(QueueDeleteForm {
+            url,
+            submit_name,
+            submit_value,
+            hidden_pairs,
+        }));
+    }
+
+    Ok(None)
+}
+
+fn extract_row_checkbox(
+    row: &scraper::element_ref::ElementRef<'_>,
+) -> Result<Option<(String, u64)>, InterspireError> {
+    let input_selector =
+        Selector::parse("input").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
+    for input in row.select(&input_selector) {
+        let Some(input_name) = input.value().attr("name") else {
+            continue;
+        };
+        if !input_name.eq_ignore_ascii_case("jobs[]") {
+            continue;
+        }
+        let Some(value) = input.value().attr("value") else {
+            continue;
+        };
+        let Ok(identifier) = value.trim().parse::<u64>() else {
+            continue;
+        };
+        return Ok(Some((input_name.to_string(), identifier)));
+    }
+    Ok(None)
+}
+
+fn parse_confirm_delete_job(href: &str) -> Option<u64> {
+    let compact = compact_text(href);
+    let lower = compact.to_ascii_lowercase();
+    let start = lower.find("confirmdelete(")?;
+    let remainder = &compact[start + "ConfirmDelete(".len()..];
+    let quote = remainder.chars().next()?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+    let closing = remainder[1..].find(quote)?;
+    remainder[1..1 + closing].trim().parse::<u64>().ok()
 }
 
 fn looks_like_queue_control_label(label: &str) -> bool {
@@ -1178,6 +1356,58 @@ mod tests {
         assert!(!serde_json::to_string(&links[0].candidate)
             .unwrap_or_else(|err| panic!("{err}"))
             .contains("index.php"));
+    }
+
+    #[test]
+    fn queue_control_links_support_legacy_confirm_delete_rows() {
+        let html = r#"
+            <form name="schedulesform" method="post" action="index.php?Page=Schedule&Action=Delete&token=keepme">
+              <input type="submit" name="DeleteSchedulesButton" value="Delete Selected">
+              <input type="hidden" name="token" value="abc123">
+              <table>
+                <tr>
+                  <th>Campaign</th><th>Actions</th>
+                </tr>
+                <tr>
+                  <td><input type="checkbox" name="jobs[]" value="182744"></td>
+                  <td>Breaking news to person@example.com</td>
+                  <td>
+                    <a href="index.php?Page=Schedule&Action=Resume&job=182744">Resume</a>
+                    <a href="javascript: ConfirmDelete('182744');">Delete</a>
+                  </td>
+                </tr>
+              </table>
+            </form>
+        "#;
+
+        let links = parse_queue_control_links("https://example.test/admin/", html, 25)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(links.len(), 1);
+        let delete = links
+            .iter()
+            .find(|link| link.candidate.action == QueueControlAction::Delete)
+            .unwrap_or_else(|| panic!("delete candidate should be present"));
+        match &delete.execution {
+            QueueControlExecution::DeletePost {
+                checkbox_name,
+                submit_name,
+                submit_value,
+                hidden_pairs,
+            } => {
+                assert_eq!(checkbox_name, "jobs[]");
+                assert_eq!(submit_name, "DeleteSchedulesButton");
+                assert_eq!(submit_value, "Delete Selected");
+                assert_eq!(
+                    hidden_pairs,
+                    &vec![("token".to_string(), "abc123".to_string())]
+                );
+            }
+            QueueControlExecution::Get => panic!("delete candidate should use post execution"),
+        }
+        assert_eq!(delete.route.identifier_value, 182744);
+        assert!(!delete.candidate.row_summary.contains("person@example.com"));
+        assert_eq!(delete.candidate.route_fingerprint.len(), 18);
     }
 
     #[test]

@@ -523,7 +523,7 @@ fn capture_form_snapshot(
     )))
 }
 
-fn parse_form_controls(form: &ElementRef<'_>) -> Vec<FormControl> {
+pub(super) fn parse_form_controls(form: &ElementRef<'_>) -> Vec<FormControl> {
     let input_selector =
         Selector::parse("input").unwrap_or_else(|err| panic!("selector parse failed: {err}"));
     let textarea_selector =
@@ -819,7 +819,7 @@ fn parse_redacted_fields_by_names(
         .collect())
 }
 
-fn should_replay_hidden_control(control: &FormControl) -> bool {
+pub(super) fn should_replay_hidden_control(control: &FormControl) -> bool {
     matches!(
         control.lower_name.as_str(),
         "token"
