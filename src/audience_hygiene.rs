@@ -726,7 +726,7 @@ fn unix_timestamp_nanos() -> Result<u128, InterspireError> {
 
 fn safe_prefix(raw: Option<&str>) -> String {
     let raw = raw.unwrap_or("interspire-audience-hygiene");
-    let mut out = raw
+    let out = raw
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
@@ -736,10 +736,22 @@ fn safe_prefix(raw: Option<&str>) -> String {
             }
         })
         .collect::<String>();
-    while out.contains("--") {
-        out = out.replace("--", "-");
+
+    let mut collapsed = String::with_capacity(out.len());
+    let mut prev_dash = false;
+    for ch in out.chars() {
+        if ch == '-' {
+            if !prev_dash {
+                collapsed.push(ch);
+                prev_dash = true;
+            }
+        } else {
+            collapsed.push(ch);
+            prev_dash = false;
+        }
     }
-    let out = out.trim_matches('-');
+
+    let out = collapsed.trim_matches('-');
     if out.is_empty() {
         "interspire-audience-hygiene".to_string()
     } else {
@@ -830,19 +842,20 @@ fn is_role_address(email: &str) -> bool {
     )
 }
 
+const DISPOSABLE_EMAIL_HINT_DOMAINS: &[&str] = &[
+    "10minutemail.com",
+    "guerrillamail.com",
+    "mailinator.com",
+    "tempmail.com",
+    "throwawaymail.com",
+    "yopmail.com",
+];
+
 fn is_disposable_hint(email: &str) -> bool {
     let Some((_local, domain)) = email.split_once('@') else {
         return false;
     };
-    matches!(
-        domain,
-        "10minutemail.com"
-            | "guerrillamail.com"
-            | "mailinator.com"
-            | "tempmail.com"
-            | "throwawaymail.com"
-            | "yopmail.com"
-    )
+    DISPOSABLE_EMAIL_HINT_DOMAINS.contains(&domain)
 }
 
 fn min_optional_text(left: Option<String>, right: Option<String>) -> Option<String> {
@@ -866,11 +879,18 @@ fn join_u64(values: &[u64]) -> String {
 mod tests {
     use super::*;
 
-    fn record(email: &str, confirmed: bool, unsubscribed: bool, bounced: bool) -> SubscriberRecord {
+    fn record(
+        subscriber_id: u64,
+        email: &str,
+        subscribe_date: u64,
+        confirmed: bool,
+        unsubscribed: bool,
+        bounced: bool,
+    ) -> SubscriberRecord {
         SubscriberRecord {
-            subscriber_id: Some(1),
+            subscriber_id: Some(subscriber_id),
             email_address: email.to_string(),
-            subscribe_date: Some(100),
+            subscribe_date: Some(subscribe_date),
             confirmed,
             unsubscribed,
             bounced,
