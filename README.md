@@ -3,8 +3,11 @@
 [![Rust baseline](https://github.com/sednalabs/interspire-6-mcp/actions/workflows/rust.yml/badge.svg)](https://github.com/sednalabs/interspire-6-mcp/actions/workflows/rust.yml)
 [![CodeQL](https://github.com/sednalabs/interspire-6-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/sednalabs/interspire-6-mcp/actions/workflows/codeql.yml)
 
-`interspire-6-mcp` is a small Rust MCP server for teams that still need to
-operate Interspire Email Marketer 6.2.3 with modern safety expectations.
+`interspire-6-mcp` is a safety-first Rust MCP server and reference
+implementation for wrapping legacy newsletter operations in a narrow,
+auditable, least-privilege tool surface. It targets Interspire Email Marketer
+6.2.3 installs that still need operational care without exposing the full
+legacy admin control plane to agents.
 
 It gives agents and operators structured answers to the questions that matter
 before newsletter work goes wrong:
@@ -22,6 +25,28 @@ The server is read-only by default. Its write-class capabilities are limited to
 guarded queue cancel/delete plus guarded no-send campaign, list, user, and
 non-secret settings edits. All apply paths stay disabled unless the runtime
 explicitly enables guarded writes and the matching control flags.
+
+## What Makes This Different
+
+This is not a generic Interspire API wrapper and it is not a browser automation
+server. It is a curated MCP facade over a legacy split control plane:
+
+- the XML API is preferred wherever it has stable source authority;
+- authenticated admin HTML is used only for specific gaps the XML API cannot
+  answer;
+- admin routes, query shapes, and form fields are allowlisted instead of
+  exposing a generic fetch or click surface;
+- write paths require preview plans, exact plan ids, runtime gates, fresh
+  readback, and redacted apply evidence;
+- private recipient artifacts stay outside git and MCP output remains
+  aggregate-only;
+- send, schedule, import, contact mutation, suppression mutation, secret,
+  provider, DNS, and generic admin tools are intentionally absent.
+
+The result is a concrete example of the legacy-system adapter pattern described
+in [`mcp-toolkit-rs`](https://github.com/sednalabs/mcp-toolkit-rs/blob/main/docs/legacy-system-adapter-pattern.md):
+wrap a risky old control plane with a small set of operator-intent tools,
+strong negative surface area, and auditable preview/apply boundaries.
 
 ## Why This Exists
 

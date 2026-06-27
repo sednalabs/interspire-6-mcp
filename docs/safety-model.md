@@ -35,6 +35,19 @@ Allowlisted writes are limited to queue cancel/delete plus guarded no-send
 campaign, list, user, and non-secret settings edits. Anything outside those
 targets stays blocked.
 
+## Negative Tool Surface
+
+The absence of broad tools is a deliberate safety feature. The server does not
+offer a generic XML call tool, raw SQL tool, generic admin URL fetcher, browser
+automation bridge, contact dump, or provider-management surface. Operators get
+named intent tools that answer reviewed operational questions; unreviewed admin
+actions stay unavailable even when the Interspire admin account itself could
+perform them in a browser.
+
+Private audience artifacts are also not send authorization. They can support
+hygiene review outside the repository, but the MCP response exposes aggregate
+evidence only and does not convert exported recipients into a send-ready list.
+
 ## Admin HTML Allowlist
 
 Legacy Interspire admin pages are brittle. The HTML adapter admits only known
@@ -49,6 +62,21 @@ paths:
 Extra query parameters, duplicate query keys, path escapes, cross-origin URLs,
 and send/import/export/contact mutation paths are blocked before HTTP requests
 are made.
+
+Admin HTML is an unsafe substrate, not a trusted API. The adapter keeps it
+behind allowlisted routes and parsers, redacts extracted values, and avoids
+returning raw pages to the MCP client. Hidden fields, selected options, and
+checked state are captured only for guarded preview/apply form workflows, then
+re-read after apply to prove what persisted.
+
+## Preview/Apply As Transaction Guard
+
+Every current write path is a two-step transaction guard. Preview captures the
+current upstream state, normalizes the intended change, and returns a
+deterministic plan id. Apply requires the matching plan id, the specific
+runtime enablement flag for that write family, a fresh upstream re-read, and a
+post-apply readback. This prevents a preview for one page, row, or form state
+from becoming a general mutation token.
 
 ## Guarded Queue Controls
 
