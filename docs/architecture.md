@@ -13,6 +13,28 @@ Email Marketer 6.2.3 state in typed, redacted, operator-oriented tools.
 - Safety posture: read-only by default, with guarded queue cancel/delete plus
   guarded no-send campaign, list, user, and non-secret settings apply paths.
 
+## Legacy Adapter Pattern
+
+This repository is both a service implementation for Interspire Email Marketer
+6.2.3 and a reference implementation of a legacy-system MCP adapter. The useful
+pattern is not "scrape an admin UI"; it is to build a narrow source-authority
+map over a split legacy control plane:
+
+- use the stable API first;
+- reach authenticated admin HTML only where the API is incomplete;
+- allowlist the exact admin pages, query shapes, actions, and fields that have
+  a reviewed operator purpose;
+- convert upstream state into redacted, typed, task-shaped MCP output;
+- bind every mutation to preview/apply plan ids, runtime gates, and post-apply
+  readback;
+- publish private recipient or validation artifacts only through private local
+  files, with aggregate MCP evidence.
+
+The generalized pattern lives in
+[`mcp-toolkit-rs`](https://github.com/sednalabs/mcp-toolkit-rs/blob/main/docs/legacy-system-adapter-pattern.md).
+Product-specific route allowlists, Interspire XML semantics, admin-form
+parsers, and operator wording stay in this repository.
+
 ## Module Boundaries
 
 | Module | Responsibility |
@@ -41,8 +63,10 @@ Email Marketer 6.2.3 state in typed, redacted, operator-oriented tools.
 ## Source Authority
 
 The XML API is preferred for list and subscriber evidence because it has a more
-stable contract than legacy admin HTML. Admin HTML is used where the XML API is
-missing important operational state:
+stable contract than legacy admin HTML. It is the first authority for list and
+subscriber readback wherever it can answer the question. Admin HTML is treated
+as an unsafe substrate and is used only where the XML API is missing important
+operational state:
 
 - list owner and reply/bounce metadata;
 - global email, bounce, and cron settings;
@@ -51,6 +75,12 @@ missing important operational state:
 - schedule and stats rows;
 - queue-control preview/action links;
 - persisted form state for guarded campaign, list, user, and settings edits.
+
+Admin HTML access is therefore route-shaped, not browser-shaped. The backend
+does not expose a general fetch tool, a click tool, arbitrary query strings, or
+raw upstream pages. Parsers extract only the reviewed state required for the
+public tool contract, and responses carry readback evidence rather than raw
+HTML dumps.
 
 The server does not treat provider delivery events, external validation results,
 or private artifact exports as Interspire state. Those may be useful inputs for
