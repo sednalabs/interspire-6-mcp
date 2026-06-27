@@ -127,7 +127,9 @@ run_workspace_checks() {
   else
     (
       cd "${workspace_path}"
-      run_cmd cargo outdated --root-deps-only --depth 1
+      if ! run_cmd cargo outdated --root-deps-only --depth 1; then
+        echo "warning: cargo outdated report failed; stale-risk reporting is non-blocking unless STRICT_OUTDATED=1" >&2
+      fi
     )
   fi
 }

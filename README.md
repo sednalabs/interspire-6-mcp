@@ -217,7 +217,8 @@ Hosted checks include:
 
 - Rust baseline: format, clippy, tests, metadata.
 - CodeQL Advanced: Rust and GitHub Actions workflow security.
-- Code Quality: Cobertura upload through GitHub Code Quality.
+- Code Quality: Cobertura artifact on every run, with best-effort GitHub Code
+  Quality upload when the repository-side feature is enabled.
 - Dependency governance: `cargo-deny`, `cargo-audit`, and direct dependency
   stale-risk reporting.
 

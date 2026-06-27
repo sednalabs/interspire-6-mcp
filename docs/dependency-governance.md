@@ -71,6 +71,11 @@ Outdated direct dependencies are report-only by default. To make them blocking:
 STRICT_OUTDATED=1 ./scripts/dependency_governance_check.sh
 ```
 
+`cargo outdated` is allowed to warn rather than fail in report-only mode because
+its solver can be stricter than the locked build graph when git dependencies
+pin older shared crates. Treat those warnings as triage input, not a green light
+to ignore stale dependencies.
+
 ## Current Exceptions
 
 - `RUSTSEC-2025-0057` (`fxhash`): maintenance-status advisory inherited through
