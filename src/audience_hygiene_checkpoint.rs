@@ -24,8 +24,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    fs::{self, OpenOptions},
-    io::Write,
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
@@ -78,14 +78,7 @@ pub(crate) fn begin_export(
         return Ok(empty_report(false, source_list_ids, warnings));
     }
 
-    let output_dir = safe_output_dir(request.output_dir.as_deref())?;
-    fs::create_dir_all(&output_dir).map_err(|err| {
-        InterspireError::Io(format!(
-            "failed to create private audience export directory: {err}"
-        ))
-    })?;
-    set_private_dir_permissions(&output_dir)?;
-    ensure_output_dir_still_approved(&output_dir)?;
+    let output_dir = prepare_checkpoint_output_dir(request.output_dir.as_deref(), true)?;
 
     if !xml.configured() {
         warnings
@@ -109,18 +102,7 @@ pub(crate) fn begin_export(
 
     let prefix = safe_prefix(request.artifact_prefix.as_deref());
     let job_id = build_job_id(&source_list_ids)?;
-    let job_dir = output_dir.join(format!("{prefix}-{job_id}"));
-    if job_dir.exists() {
-        return Err(InterspireError::Io(format!(
-            "checkpoint job directory already exists: {}",
-            job_dir.display()
-        )));
-    }
-    fs::create_dir_all(&job_dir).map_err(|err| {
-        InterspireError::Io(format!("failed to create checkpoint job directory: {err}"))
-    })?;
-    set_private_dir_permissions(&job_dir)?;
-    ensure_output_dir_still_approved(&job_dir)?;
+    let job_dir = create_checkpoint_job_dir(&output_dir, &prefix, &job_id)?;
 
     let state = ExportJobState {
         version: JOB_STATE_VERSION,
@@ -173,7 +155,7 @@ pub(crate) fn resume_export(
     xml: &XmlApiClient,
     request: &AudienceHygieneExportResumeRequest,
 ) -> Result<AudienceHygieneExportReport, InterspireError> {
-    let output_dir = safe_output_dir(request.output_dir.as_deref())?;
+    let output_dir = prepare_checkpoint_output_dir(request.output_dir.as_deref(), false)?;
     let mut state = load_state(&output_dir, &request.job_id)?;
 
     if !xml.configured() {
@@ -258,7 +240,7 @@ pub(crate) fn resume_export(
 pub(crate) fn export_status(
     request: &AudienceHygieneExportStatusRequest,
 ) -> Result<AudienceHygieneExportReport, InterspireError> {
-    let output_dir = safe_output_dir(request.output_dir.as_deref())?;
+    let output_dir = prepare_checkpoint_output_dir(request.output_dir.as_deref(), false)?;
     let state = load_state(&output_dir, &request.job_id)?;
     build_report(&state, 0)
 }
@@ -326,11 +308,8 @@ fn build_report(
     queries_processed_this_call: u64,
 ) -> Result<AudienceHygieneExportReport, InterspireError> {
     let job_dir = Path::new(&state.job_dir);
-    let checkpoint_artifacts = vec![artifact(
-        "checkpoint_state_json",
-        &state_path(job_dir),
-        true,
-    )?];
+    let state_file = state_path(job_dir)?;
+    let checkpoint_artifacts = vec![artifact("checkpoint_state_json", &state_file, true)?];
     let completed_lists = completed_list_summaries(&state.lists);
     let remaining_list_ids = state
         .lists
@@ -516,11 +495,58 @@ fn build_job_id(source_list_ids: &[u64]) -> Result<String, InterspireError> {
     ))
 }
 
+fn prepare_checkpoint_output_dir(
+    raw: Option<&str>,
+    create: bool,
+) -> Result<PathBuf, InterspireError> {
+    let output_dir = safe_output_dir(raw)?;
+    if create {
+        fs::create_dir_all(&output_dir).map_err(|err| {
+            InterspireError::Io(format!(
+                "failed to create private audience export directory: {err}"
+            ))
+        })?;
+        ensure_output_dir_still_approved(&output_dir)?;
+        set_private_dir_permissions(&output_dir)?;
+    }
+    ensure_output_dir_still_approved(&output_dir)?;
+    output_dir.canonicalize().map_err(|err| {
+        InterspireError::Safety(format!(
+            "failed to resolve private checkpoint output directory: {err}"
+        ))
+    })
+}
+
+fn create_checkpoint_job_dir(
+    output_dir: &Path,
+    prefix: &str,
+    job_id: &str,
+) -> Result<PathBuf, InterspireError> {
+    ensure_checkpoint_segment("checkpoint artifact prefix", prefix)?;
+    let job_id = checked_job_id(job_id)?;
+    let job_dir = output_dir.join(format!("{prefix}-{job_id}"));
+    ensure_direct_checkpoint_child(output_dir, &job_dir)?;
+    if job_dir.exists() {
+        return Err(InterspireError::Io(format!(
+            "checkpoint job directory already exists: {}",
+            job_dir.display()
+        )));
+    }
+    fs::create_dir(&job_dir).map_err(|err| {
+        InterspireError::Io(format!("failed to create checkpoint job directory: {err}"))
+    })?;
+    ensure_checkpoint_job_dir(output_dir, &job_dir)?;
+    set_private_dir_permissions(&job_dir)?;
+    ensure_checkpoint_job_dir(output_dir, &job_dir)?;
+    Ok(job_dir)
+}
+
 fn load_state(output_dir: &Path, job_id: &str) -> Result<ExportJobState, InterspireError> {
+    let job_id = checked_job_id(job_id)?;
     let job_dir = find_job_dir(output_dir, job_id)?;
-    let body = fs::read(state_path(&job_dir))
-        .map_err(|err| InterspireError::Io(format!("failed to read checkpoint state: {err}")))?;
-    let state: ExportJobState = serde_json::from_slice(&body)
+    let state_file = state_path(&job_dir)?;
+    let body = read_checkpoint_state_file(&state_file)?;
+    let mut state: ExportJobState = serde_json::from_slice(&body)
         .map_err(|err| InterspireError::Io(format!("failed to parse checkpoint state: {err}")))?;
     if state.version != JOB_STATE_VERSION {
         return Err(InterspireError::Io(format!(
@@ -528,45 +554,41 @@ fn load_state(output_dir: &Path, job_id: &str) -> Result<ExportJobState, Intersp
             state.version
         )));
     }
+    if state.job_id != job_id {
+        return Err(InterspireError::Safety(
+            "checkpoint state job_id does not match the requested job".to_string(),
+        ));
+    }
+    state.job_dir = job_dir.display().to_string();
     Ok(state)
 }
 
 fn find_job_dir(output_dir: &Path, job_id: &str) -> Result<PathBuf, InterspireError> {
-    let job_id = job_id.trim();
-    if job_id.is_empty() {
-        return Err(InterspireError::Safety(
-            "checkpoint job_id must be a non-empty exact identifier".to_string(),
-        ));
-    }
+    let job_id = checked_job_id(job_id)?;
     let expected_suffix = format!("-{job_id}");
     let entries = fs::read_dir(output_dir)
         .map_err(|err| InterspireError::Io(format!("failed to read output dir: {err}")))?;
-    let mut fallback_candidates = Vec::new();
     for entry in entries {
         let entry =
             entry.map_err(|err| InterspireError::Io(format!("failed to read dir entry: {err}")))?;
-        let path = entry.path();
-        if !path.is_dir() {
+        let file_type = entry
+            .file_type()
+            .map_err(|err| InterspireError::Io(format!("failed to read dir entry type: {err}")))?;
+        if !file_type.is_dir() {
             continue;
         }
+        let path = entry.path();
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-            fallback_candidates.push(path);
             continue;
         };
-        if name.ends_with(&expected_suffix) {
-            ensure_output_dir_still_approved(&path)?;
-            if matches!(stored_job_id(&path).as_deref(), Ok(stored) if stored == job_id) {
-                return Ok(path);
-            }
+        if !name.ends_with(&expected_suffix) {
             continue;
         }
-        fallback_candidates.push(path);
-    }
-
-    for path in fallback_candidates {
-        ensure_output_dir_still_approved(&path)?;
-        if matches!(stored_job_id(&path).as_deref(), Ok(stored) if stored == job_id) {
-            return Ok(path);
+        ensure_checkpoint_job_dir(output_dir, &path)?;
+        match stored_job_id(&path) {
+            Ok(stored) if stored == job_id => return Ok(path),
+            Ok(_) => continue,
+            Err(err) => return Err(err),
         }
     }
     Err(InterspireError::Io(format!(
@@ -582,13 +604,8 @@ fn stored_job_id(job_dir: &Path) -> Result<String, InterspireError> {
         job_id: String,
     }
 
-    let path = state_path(job_dir);
-    let body = fs::read(&path).map_err(|err| {
-        InterspireError::Io(format!(
-            "failed to read checkpoint state {}: {err}",
-            path.display()
-        ))
-    })?;
+    let path = state_path(job_dir)?;
+    let body = read_checkpoint_state_file(&path)?;
     let identity: StoredJobIdentity = serde_json::from_slice(&body).map_err(|err| {
         InterspireError::Io(format!(
             "failed to parse checkpoint state {}: {err}",
@@ -600,20 +617,13 @@ fn stored_job_id(job_dir: &Path) -> Result<String, InterspireError> {
 
 fn write_state(job_dir: &Path, state: &ExportJobState) -> Result<(), InterspireError> {
     ensure_output_dir_still_approved(job_dir)?;
-    let path = state_path(job_dir);
-    let temp_path = job_dir.join(format!(".{}.tmp", JOB_STATE_FILE));
+    let path = state_path(job_dir)?;
+    let temp_path = checkpoint_temp_state_path(job_dir)?;
     let body = serde_json::to_vec_pretty(state).map_err(|err| {
         InterspireError::Io(format!("failed to serialize checkpoint state: {err}"))
     })?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&temp_path)
-        .map_err(|err| {
-            InterspireError::Io(format!("failed to open checkpoint temp file: {err}"))
-        })?;
+    remove_stale_checkpoint_temp_file(&temp_path)?;
+    let mut file = create_checkpoint_state_temp_file(&temp_path)?;
     file.write_all(&body)
         .map_err(|err| InterspireError::Io(format!("failed to write checkpoint state: {err}")))?;
     file.flush()
@@ -628,8 +638,170 @@ fn write_state(job_dir: &Path, state: &ExportJobState) -> Result<(), InterspireE
     Ok(())
 }
 
-fn state_path(job_dir: &Path) -> PathBuf {
-    job_dir.join(JOB_STATE_FILE)
+fn read_checkpoint_state_file(path: &Path) -> Result<Vec<u8>, InterspireError> {
+    ensure_regular_checkpoint_file(path)?;
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|err| {
+            InterspireError::Io(format!(
+                "failed to open checkpoint state {}: {err}",
+                path.display()
+            ))
+        })?;
+    let mut body = Vec::new();
+    file.read_to_end(&mut body).map_err(|err| {
+        InterspireError::Io(format!(
+            "failed to read checkpoint state {}: {err}",
+            path.display()
+        ))
+    })?;
+    Ok(body)
+}
+
+fn create_checkpoint_state_temp_file(path: &Path) -> Result<File, InterspireError> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|err| InterspireError::Io(format!("failed to create checkpoint temp file: {err}")))
+}
+
+fn remove_stale_checkpoint_temp_file(path: &Path) -> Result<(), InterspireError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(InterspireError::Safety(
+            "checkpoint temp state file must not be a symlink".to_string(),
+        )),
+        Ok(metadata) if metadata.is_file() => fs::remove_file(path).map_err(|err| {
+            InterspireError::Io(format!(
+                "failed to remove stale checkpoint temp file: {err}"
+            ))
+        }),
+        Ok(_) => Err(InterspireError::Safety(
+            "checkpoint temp state path must be a regular file".to_string(),
+        )),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(InterspireError::Io(format!(
+            "failed to inspect checkpoint temp file: {err}"
+        ))),
+    }
+}
+
+fn ensure_regular_checkpoint_file(path: &Path) -> Result<(), InterspireError> {
+    let metadata = fs::symlink_metadata(path).map_err(|err| {
+        InterspireError::Io(format!(
+            "failed to stat checkpoint state {}: {err}",
+            path.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(InterspireError::Safety(
+            "checkpoint state file must not be a symlink".to_string(),
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(InterspireError::Safety(
+            "checkpoint state path must be a regular file".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn state_path(job_dir: &Path) -> Result<PathBuf, InterspireError> {
+    checkpoint_file_path(job_dir, JOB_STATE_FILE)
+}
+
+fn checkpoint_temp_state_path(job_dir: &Path) -> Result<PathBuf, InterspireError> {
+    checkpoint_file_path(job_dir, &format!(".{}.tmp", JOB_STATE_FILE))
+}
+
+fn checkpoint_file_path(job_dir: &Path, file_name: &str) -> Result<PathBuf, InterspireError> {
+    ensure_checkpoint_state_file_name(file_name)?;
+    ensure_output_dir_still_approved(job_dir)?;
+    let path = job_dir.join(file_name);
+    if path.parent() != Some(job_dir) {
+        return Err(InterspireError::Safety(
+            "checkpoint state path must remain inside the job directory".to_string(),
+        ));
+    }
+    Ok(path)
+}
+
+fn ensure_checkpoint_job_dir(output_dir: &Path, job_dir: &Path) -> Result<(), InterspireError> {
+    ensure_direct_checkpoint_child(output_dir, job_dir)?;
+    ensure_output_dir_still_approved(job_dir)?;
+    let canonical_output = output_dir.canonicalize().map_err(|err| {
+        InterspireError::Safety(format!(
+            "failed to resolve checkpoint output directory: {err}"
+        ))
+    })?;
+    let canonical_job = job_dir.canonicalize().map_err(|err| {
+        InterspireError::Safety(format!("failed to resolve checkpoint job directory: {err}"))
+    })?;
+    if canonical_job.parent() != Some(canonical_output.as_path()) {
+        return Err(InterspireError::Safety(
+            "checkpoint job directory must resolve as a direct child of output_dir".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_direct_checkpoint_child(
+    output_dir: &Path,
+    job_dir: &Path,
+) -> Result<(), InterspireError> {
+    if job_dir.parent() != Some(output_dir) {
+        return Err(InterspireError::Safety(
+            "checkpoint job directory must be a direct child of output_dir".to_string(),
+        ));
+    }
+    let name = job_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            InterspireError::Safety(
+                "checkpoint job directory must have a valid UTF-8 name".to_string(),
+            )
+        })?;
+    ensure_checkpoint_segment("checkpoint job directory name", name)
+}
+
+fn checked_job_id(raw: &str) -> Result<&str, InterspireError> {
+    let job_id = raw.trim();
+    if !job_id.starts_with("iah_") {
+        return Err(InterspireError::Safety(
+            "checkpoint job_id must use the iah_ prefix".to_string(),
+        ));
+    }
+    ensure_checkpoint_segment("checkpoint job_id", job_id)?;
+    Ok(job_id)
+}
+
+fn ensure_checkpoint_segment(label: &str, value: &str) -> Result<(), InterspireError> {
+    if value.is_empty()
+        || value.len() > 160
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        return Err(InterspireError::Safety(format!(
+            "{label} must be a non-empty safe path segment"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_checkpoint_state_file_name(file_name: &str) -> Result<(), InterspireError> {
+    let temp_name = format!(".{}.tmp", JOB_STATE_FILE);
+    if matches!(file_name, JOB_STATE_FILE) || file_name == temp_name {
+        return Ok(());
+    }
+    Err(InterspireError::Safety(
+        "checkpoint state file name must be one of the fixed checkpoint filenames".to_string(),
+    ))
 }
 
 fn normalized_source_list_ids(values: &[u64]) -> Vec<u64> {
@@ -726,7 +898,7 @@ mod tests {
         fs::create_dir_all(&broken_dir).expect("create broken job dir");
         fs::create_dir_all(&job_dir).expect("create target job dir");
         fs::write(
-            state_path(&broken_dir),
+            state_path(&broken_dir).expect("build broken state path"),
             b"{\"job_id\": \"broken\", \"unterminated\"",
         )
         .expect("write broken state");
@@ -736,6 +908,87 @@ mod tests {
         assert_eq!(resolved, job_dir);
 
         fs::remove_dir_all(&output_dir).unwrap_or_default();
+    }
+
+    #[test]
+    fn load_state_uses_resolved_job_dir_not_stored_state_path() {
+        let output_dir = unique_dir("load-resolves-job-dir");
+        let job_dir = output_dir.join("fixture-iah_777");
+        fs::create_dir_all(&job_dir).expect("create job dir");
+        let mut state = fixture_state(&job_dir, "iah_777");
+        state.job_dir = "/tmp/interspire-checkpoint-wrong-dir".to_string();
+        write_state(&job_dir, &state).expect("write tampered checkpoint state");
+
+        let loaded = load_state(&output_dir, "iah_777").expect("load checkpoint state");
+
+        assert_eq!(loaded.job_dir, job_dir.display().to_string());
+
+        fs::remove_dir_all(&output_dir).unwrap_or_default();
+    }
+
+    #[test]
+    fn load_state_rejects_symlink_state_file() {
+        let output_dir = unique_dir("state-symlink-read");
+        let job_dir = output_dir.join("fixture-iah_778");
+        fs::create_dir_all(&job_dir).expect("create job dir");
+        let target_path = output_dir.join("state-target.json");
+        fs::write(
+            &target_path,
+            serde_json::to_vec(&fixture_state(&job_dir, "iah_778")).unwrap(),
+        )
+        .expect("write symlink target state");
+        std::os::unix::fs::symlink(&target_path, state_path(&job_dir).unwrap())
+            .expect("create state symlink");
+
+        let err = load_state(&output_dir, "iah_778").expect_err("symlink state must fail");
+
+        assert_eq!(err.code(), "safety_policy_blocked");
+
+        fs::remove_dir_all(&output_dir).unwrap_or_default();
+    }
+
+    #[test]
+    fn write_state_rejects_symlink_temp_state_file() {
+        let output_dir = unique_dir("state-symlink-write");
+        let job_dir = output_dir.join("fixture-iah_779");
+        fs::create_dir_all(&job_dir).expect("create job dir");
+        let target_path = output_dir.join("temp-target.json");
+        fs::write(&target_path, b"unchanged").expect("write temp target");
+        std::os::unix::fs::symlink(&target_path, checkpoint_temp_state_path(&job_dir).unwrap())
+            .expect("create temp symlink");
+
+        let err = write_state(&job_dir, &fixture_state(&job_dir, "iah_779"))
+            .expect_err("symlink temp state must fail");
+
+        assert_eq!(err.code(), "safety_policy_blocked");
+        assert_eq!(
+            fs::read_to_string(&target_path).expect("read temp target"),
+            "unchanged"
+        );
+
+        fs::remove_dir_all(&output_dir).unwrap_or_default();
+    }
+
+    #[test]
+    fn begin_output_preparation_rejects_symlink_before_chmod() {
+        let output_dir = unique_dir("output-symlink");
+        let target_dir = unique_dir("output-symlink-target");
+        fs::create_dir_all(&target_dir).expect("create target dir");
+        fs::set_permissions(&target_dir, fs::Permissions::from_mode(0o755))
+            .expect("set target mode");
+        std::os::unix::fs::symlink(&target_dir, &output_dir).expect("create output symlink");
+
+        let err = prepare_checkpoint_output_dir(Some(&output_dir.display().to_string()), true)
+            .expect_err("output symlink must fail");
+
+        assert_eq!(err.code(), "safety_policy_blocked");
+        assert_eq!(
+            fs::metadata(&target_dir).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+
+        fs::remove_file(&output_dir).unwrap_or_default();
+        fs::remove_dir_all(&target_dir).unwrap_or_default();
     }
 
     #[test]

@@ -260,8 +260,10 @@ target/release/interspire-6-mcp audience-hygiene-export-resume \
 ```
 
 Checkpoint state is written privately under the approved output root and the
-MCP response stays aggregate and redacted. This is a resumable export helper,
-not a background send or task runner.
+MCP response stays aggregate and redacted. Resume and status calls resolve the
+job from the approved output root and rewrite loaded state to that resolved
+directory, so checkpoint state cannot redirect later file reads or writes. This
+is a resumable export helper, not a background send or task runner.
 
 ## Development
 
