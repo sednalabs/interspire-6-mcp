@@ -99,6 +99,23 @@ pub fn ensure_allowed_queue_control(
     Ok((url, route))
 }
 
+pub fn ensure_allowed_queue_control_delete_post(
+    base_url: &str,
+    relative_path: &str,
+) -> Result<Url, InterspireError> {
+    let base = Url::parse(base_url)
+        .map_err(|err| InterspireError::Safety(format!("invalid admin base url: {err}")))?;
+    let base = normalize_admin_base(base);
+    let url = base.join(relative_path).map_err(|err| {
+        InterspireError::Safety(format!("invalid queue control delete post path: {err}"))
+    })?;
+
+    ensure_admin_base_scope(&base, &url)?;
+    ensure_admin_front_controller_path(&base, &url)?;
+    classify_allowed_queue_control_delete_post(&url)?;
+    Ok(url)
+}
+
 pub fn ensure_allowed_admin_post_for(
     base_url: &str,
     relative_path: &str,
@@ -251,6 +268,47 @@ pub fn classify_allowed_queue_control(url: &Url) -> Result<QueueControlRoute, In
         identifier_key,
         identifier_value,
     })
+}
+
+pub fn classify_allowed_queue_control_delete_post(url: &Url) -> Result<(), InterspireError> {
+    if url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .is_none_or(|segment| segment != "index.php")
+    {
+        return Err(InterspireError::Safety(
+            "queue control delete post path is not index.php".to_string(),
+        ));
+    }
+
+    let pairs = url.query_pairs().collect::<Vec<_>>();
+    ensure_no_duplicate_query_keys(&pairs)?;
+    ensure_only_query_keys(
+        &pairs,
+        &["Page", "Action", "token", "csrf", "csrf_token", "_token"],
+    )?;
+
+    let page = pairs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("Page"))
+        .map(|(_, value)| value.to_string());
+    let action = pairs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("Action"))
+        .map(|(_, value)| value.to_string());
+
+    if !matches!(page.as_deref(), Some("Schedule")) {
+        return Err(InterspireError::Safety(
+            "queue control delete post must target the Schedule page".to_string(),
+        ));
+    }
+    if !matches!(action.as_deref(), Some("Delete")) {
+        return Err(InterspireError::Safety(format!(
+            "queue control delete post action is not the delete allowlist: {action:?}"
+        )));
+    }
+
+    Ok(())
 }
 
 pub fn classify_allowed_admin_write(url: &Url) -> Result<AdminWriteRoute, InterspireError> {
@@ -722,6 +780,16 @@ mod tests {
     }
 
     #[test]
+    fn allows_schedule_delete_post_route() {
+        let delete = ensure_allowed_queue_control_delete_post(
+            "https://example.test/admin/",
+            "index.php?Page=Schedule&Action=Delete&token=abc",
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert!(delete.as_str().contains("Page=Schedule&Action=Delete"));
+    }
+
+    #[test]
     fn allows_guarded_form_write_routes_for_expected_targets() {
         let base_url = "https://example.test/admin/";
         let list_url = ensure_allowed_admin_post_for(
@@ -799,6 +867,22 @@ mod tests {
         ] {
             assert!(
                 classify_allowed_queue_control(&url(path)).is_err(),
+                "{path} should be blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn queue_delete_post_blocks_non_delete_or_smuggled_routes() {
+        let base_url = "https://example.test/admin/";
+        for path in [
+            "index.php?Page=Schedule&Action=Resume",
+            "index.php?Page=Schedule&Action=Delete&job=42&token=abc",
+            "index.php?Page=Newsletters&Action=Delete",
+            "index.php?Page=Schedule&Action=Delete&Action=Resume",
+        ] {
+            assert!(
+                ensure_allowed_queue_control_delete_post(base_url, path).is_err(),
                 "{path} should be blocked"
             );
         }
