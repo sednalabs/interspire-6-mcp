@@ -1,0 +1,19 @@
+<response>
+  <status>SUCCESS</status>
+  <data>
+    <item>
+      <listid>7</listid>
+      <name>Editorial updates</name>
+      <subscribecount>42</subscribecount>
+      <unsubscribecount>3</unsubscribecount>
+      <autorespondercount>0</autorespondercount>
+    </item>
+    <item>
+      <listid>8</listid>
+      <name>Partner news</name>
+      <subscribecount>10</subscribecount>
+      <unsubscribecount>0</unsubscribecount>
+      <autorespondercount>1</autorespondercount>
+    </item>
+  </data>
+</response>

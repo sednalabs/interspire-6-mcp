@@ -1,0 +1,10 @@
+name: interspire-6-mcp-codeql-rust
+
+queries:
+  - uses: security-and-quality
+
+paths:
+  - src
+  - tests
+
+threat-models: [local]

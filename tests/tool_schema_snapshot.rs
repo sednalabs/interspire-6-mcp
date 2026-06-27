@@ -1,0 +1,107 @@
+use interspire_6_mcp::{
+    AudienceHygieneExportReport, AudienceHygieneExportRequest, CampaignReadbackReport,
+    CampaignReadbackRequest, ContactStateReport, ContactStateRequest, InterspireError,
+    InterspireMcpServer, InterspireReadBackend, ListOwnerReadbackReport, ListOwnerReadbackRequest,
+    ListSummaryReport, ListSummaryRequest, QueueControlApplyReport, QueueControlApplyRequest,
+    QueueControlPreviewReport, QueueControlPreviewRequest, QueueStatsReadbackReport,
+    QueueStatsReadbackRequest, SettingsAuditReport, SettingsAuditRequest, StatusReport,
+    StatusRequest, UserSmtpReadbackReport, UserSmtpReadbackRequest, WarmupAudienceReadinessReport,
+    WarmupAudienceReadinessRequest,
+};
+use mcp_toolkit_testing::assert_tool_schema_snapshot;
+use std::{path::PathBuf, sync::Arc};
+
+#[derive(Debug)]
+struct FixtureBackend;
+
+impl InterspireReadBackend for FixtureBackend {
+    fn status(&self, _request: &StatusRequest) -> Result<StatusReport, InterspireError> {
+        Ok(StatusReport::fixture())
+    }
+
+    fn list_summary(
+        &self,
+        _request: &ListSummaryRequest,
+    ) -> Result<ListSummaryReport, InterspireError> {
+        Ok(ListSummaryReport::fixture())
+    }
+
+    fn contact_state(
+        &self,
+        request: &ContactStateRequest,
+    ) -> Result<ContactStateReport, InterspireError> {
+        Ok(ContactStateReport::fixture(&request.email, request.list_id))
+    }
+
+    fn list_owner_readback(
+        &self,
+        _request: &ListOwnerReadbackRequest,
+    ) -> Result<ListOwnerReadbackReport, InterspireError> {
+        Ok(ListOwnerReadbackReport::fixture())
+    }
+
+    fn settings_audit(
+        &self,
+        _request: &SettingsAuditRequest,
+    ) -> Result<SettingsAuditReport, InterspireError> {
+        Ok(SettingsAuditReport::fixture())
+    }
+
+    fn user_smtp_readback(
+        &self,
+        _request: &UserSmtpReadbackRequest,
+    ) -> Result<UserSmtpReadbackReport, InterspireError> {
+        Ok(UserSmtpReadbackReport::fixture())
+    }
+
+    fn queue_stats_readback(
+        &self,
+        _request: &QueueStatsReadbackRequest,
+    ) -> Result<QueueStatsReadbackReport, InterspireError> {
+        Ok(QueueStatsReadbackReport::fixture())
+    }
+
+    fn queue_control_preview(
+        &self,
+        _request: &QueueControlPreviewRequest,
+    ) -> Result<QueueControlPreviewReport, InterspireError> {
+        Ok(QueueControlPreviewReport::fixture())
+    }
+
+    fn queue_control_apply(
+        &self,
+        _request: &QueueControlApplyRequest,
+    ) -> Result<QueueControlApplyReport, InterspireError> {
+        Ok(QueueControlApplyReport::fixture())
+    }
+
+    fn campaign_readback(
+        &self,
+        _request: &CampaignReadbackRequest,
+    ) -> Result<CampaignReadbackReport, InterspireError> {
+        Ok(CampaignReadbackReport::fixture())
+    }
+
+    fn warmup_audience_readiness(
+        &self,
+        _request: &WarmupAudienceReadinessRequest,
+    ) -> Result<WarmupAudienceReadinessReport, InterspireError> {
+        Ok(WarmupAudienceReadinessReport::fixture())
+    }
+
+    fn audience_hygiene_export(
+        &self,
+        _request: &AudienceHygieneExportRequest,
+    ) -> Result<AudienceHygieneExportReport, InterspireError> {
+        Ok(AudienceHygieneExportReport::fixture())
+    }
+}
+
+#[test]
+fn tool_schema_snapshot_contract_is_stable() {
+    let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend))
+        .unwrap_or_else(|err| panic!("server should build: {err}"));
+    let snapshot_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("spec/tool_schema_snapshot.v1.json");
+    assert_tool_schema_snapshot(snapshot_path, &server.tool_schema_snapshot());
+}

@@ -1,0 +1,307 @@
+{
+  "schema": "mcp_tool_schema_snapshot",
+  "tools": [
+    {
+      "description": "Export explicitly requested Interspire audience hygiene artifacts privately and return aggregate counts only.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "artifact_prefix": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "include_sqlite": {
+            "default": true,
+            "type": "boolean"
+          },
+          "output_dir": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_list_ids": {
+            "default": [],
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "title": "AudienceHygieneExportRequest",
+        "type": "object"
+      },
+      "name": "interspire_audience_hygiene_export"
+    },
+    {
+      "description": "Read campaign manage rows or one campaign edit page summary.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "campaign_id": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "max_rows": {
+            "default": null,
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "CampaignReadbackRequest",
+        "type": "object"
+      },
+      "name": "interspire_campaign_readback"
+    },
+    {
+      "description": "Check one redacted contact's Interspire XML list presence.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "list_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "email",
+          "list_id"
+        ],
+        "title": "ContactStateRequest",
+        "type": "object"
+      },
+      "name": "interspire_contact_state"
+    },
+    {
+      "description": "Read Interspire list owner, reply-to, and bounce metadata.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "max_lists": {
+            "default": null,
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "ListOwnerReadbackRequest",
+        "type": "object"
+      },
+      "name": "interspire_list_owner_readback"
+    },
+    {
+      "description": "Summarize Interspire contact lists and aggregate state counts.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "include_html_enrichment": {
+            "default": true,
+            "type": "boolean"
+          },
+          "max_lists": {
+            "default": 25,
+            "description": "Maximum list rows to return. Defaults to 25 and is capped at 100.",
+            "format": "uint",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "title": "ListSummaryRequest",
+        "type": "object"
+      },
+      "name": "interspire_list_summary"
+    },
+    {
+      "description": "Apply a previously previewed Interspire scheduled queue cancel/delete plan. Requires guarded write environment flags.",
+      "inputSchema": {
+        "$defs": {
+          "QueueControlAction": {
+            "enum": [
+              "cancel",
+              "delete"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "action": {
+            "$ref": "#/$defs/QueueControlAction"
+          },
+          "plan_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "action"
+        ],
+        "title": "QueueControlApplyRequest",
+        "type": "object"
+      },
+      "name": "interspire_queue_control_apply"
+    },
+    {
+      "description": "Preview cancel/delete plan ids for Interspire scheduled queue rows. Preview is read-only.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "max_rows": {
+            "default": null,
+            "description": "Maximum scheduled rows to inspect. Defaults to 25 and is capped at 100.",
+            "format": "uint",
+            "maximum": 100,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "QueueControlPreviewRequest",
+        "type": "object"
+      },
+      "name": "interspire_queue_control_preview"
+    },
+    {
+      "description": "Read scheduled queue and stats page summaries without triggering cron.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "max_rows": {
+            "default": null,
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "QueueStatsReadbackRequest",
+        "type": "object"
+      },
+      "name": "interspire_queue_stats_readback"
+    },
+    {
+      "description": "Read redacted Interspire global settings for email, bounce, and cron.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "include_cron": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "title": "SettingsAuditRequest",
+        "type": "object"
+      },
+      "name": "interspire_settings_audit"
+    },
+    {
+      "description": "Report Interspire MCP configuration and safe read capability.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "include_html_probe": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "title": "StatusRequest",
+        "type": "object"
+      },
+      "name": "interspire_status"
+    },
+    {
+      "description": "Read redacted per-user SMTP override state.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "max_users": {
+            "default": null,
+            "format": "uint",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "UserSmtpReadbackRequest",
+        "type": "object"
+      },
+      "name": "interspire_user_smtp_readback"
+    },
+    {
+      "description": "Assess a specified-list warm-up audience from Interspire list counts without exporting contacts.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "include_html_enrichment": {
+            "default": false,
+            "type": "boolean"
+          },
+          "priority_list_ids": {
+            "default": [],
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "source_list_ids": {
+            "default": [],
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "tranche_sizes": {
+            "default": [
+              100,
+              400,
+              500
+            ],
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "title": "WarmupAudienceReadinessRequest",
+        "type": "object"
+      },
+      "name": "interspire_warmup_audience_readiness"
+    }
+  ],
+  "version": 1
+}

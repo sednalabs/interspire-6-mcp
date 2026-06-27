@@ -1,0 +1,11 @@
+.agents/
+.codex/
+.git-repo/
+target/
+.env
+.env.*
+coverage/
+private-artifacts/
+interspire-audience-hygiene/
+*.log
+*.tmp
