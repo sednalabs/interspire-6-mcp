@@ -19,6 +19,11 @@ Email Marketer 6.2.3 state in typed, redacted, operator-oriented tools.
 | --- | --- |
 | `lib.rs` | MCP server, tool inventory, trait boundary, tool handlers. |
 | `config.rs` | Environment and secret-file configuration without exposing values. |
+| `live.rs` | Thin backend root that keeps the trait surface stable while delegating to domain modules. |
+| `live/reads.rs` | Read-only backend handlers for status, list/contact readback, settings, queue stats, and campaign readback. |
+| `live/guarded.rs` | Guarded queue-control and no-send form-write preview/apply handlers. |
+| `live/audience.rs` | Warm-up readiness and audience-hygiene handler orchestration. |
+| `live/support.rs` | Shared list caps, source-list filtering, and local helper utilities for the live backend. |
 | `xml_api.rs` | Interspire XML API reads and XML parsing. |
 | `admin_html.rs` | Authenticated admin HTML reads, queue-control extraction, and redacted parsing helpers. |
 | `admin_html/forms.rs` | Guarded form snapshotting, allowlisted field updates, preview/apply plan binding, and field-scoped POST construction. |
