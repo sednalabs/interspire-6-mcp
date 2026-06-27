@@ -866,11 +866,18 @@ fn join_u64(values: &[u64]) -> String {
 mod tests {
     use super::*;
 
-    fn record(email: &str, confirmed: bool, unsubscribed: bool, bounced: bool) -> SubscriberRecord {
+    fn record(
+        subscriber_id: u64,
+        email: &str,
+        subscribe_date: u64,
+        confirmed: bool,
+        unsubscribed: bool,
+        bounced: bool,
+    ) -> SubscriberRecord {
         SubscriberRecord {
-            subscriber_id: Some(1),
+            subscriber_id: Some(subscriber_id),
             email_address: email.to_string(),
-            subscribe_date: Some(100),
+            subscribe_date: Some(subscribe_date),
             confirmed,
             unsubscribed,
             bounced,
