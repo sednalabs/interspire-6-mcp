@@ -61,6 +61,9 @@ The checkpointed audience export flow is deliberately transport-local rather
 than a generic background-task framework. It persists bounded progress under an
 approved private output root, advances only a limited number of subscriber XML
 queries per call, and lets operators resume safely after MCP/client timeouts.
+Checkpoint resume/status resolves jobs as direct children of that approved root
+and normalizes loaded state back to the resolved directory before any later
+checkpoint read or write.
 
 ## Contract Tests
 
