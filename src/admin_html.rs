@@ -20,7 +20,7 @@ use crate::{
     safety::{self, AdminReadPage, QueueControlRoute},
 };
 use reqwest::{blocking::Client, redirect::Policy};
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, time::Duration};
 use url::Url;
@@ -736,6 +736,9 @@ pub fn parse_table_rows(html: &str, max_rows: usize) -> Result<Vec<String>, Inte
         Selector::parse("tr").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
     let mut rows = Vec::new();
     for row in document.select(&row_selector) {
+        if row_contains_nested_rows(&row, &row_selector) {
+            continue;
+        }
         let text = row.text().collect::<Vec<_>>().join(" ");
         let compact = compact_text(&text);
         if compact.len() < 3 || compact.eq_ignore_ascii_case("actions") {
@@ -764,6 +767,9 @@ fn parse_queue_control_links(
     let mut inspected_rows = 0usize;
 
     for row in document.select(&row_selector) {
+        if row_contains_nested_rows(&row, &row_selector) {
+            continue;
+        }
         let row_text = compact_text(&row.text().collect::<Vec<_>>().join(" "));
         if row_text.len() < 3 || row_text.eq_ignore_ascii_case("actions") {
             continue;
@@ -815,6 +821,10 @@ fn parse_queue_control_links(
     }
 
     Ok(links)
+}
+
+fn row_contains_nested_rows(row: &ElementRef<'_>, row_selector: &Selector) -> bool {
+    row.select(row_selector).next().is_some()
 }
 
 fn parse_queue_control_link_target(
@@ -1359,6 +1369,46 @@ mod tests {
     }
 
     #[test]
+    fn queue_control_preview_ignores_nested_container_rows() {
+        let html = r#"
+            <table>
+              <tr>
+                <td>
+                  Results per page: 5 10 20
+                  <table>
+                    <tr>
+                      <td>Campaign Alpha</td>
+                      <td><a href="index.php?Page=Schedule&Action=Delete&id=41">Delete</a></td>
+                    </tr>
+                    <tr>
+                      <td>Campaign Beta for person@example.com</td>
+                      <td><a href="index.php?Page=Schedule&Action=Cancel&id=42">Cancel</a></td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+        "#;
+
+        let links = parse_queue_control_links("https://example.test/admin/", html, 25)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(links.len(), 2);
+        assert!(links
+            .iter()
+            .all(|link| !link.candidate.row_summary.contains("Results per page")));
+        assert!(links
+            .iter()
+            .any(|link| link.candidate.row_summary.contains("Campaign Alpha")));
+        assert!(links
+            .iter()
+            .any(|link| link.candidate.row_summary.contains("Campaign Beta")));
+        assert!(links
+            .iter()
+            .all(|link| !link.candidate.row_summary.contains("person@example.com")));
+    }
+
+    #[test]
     fn queue_control_links_support_legacy_confirm_delete_rows() {
         let html = r#"
             <form name="schedulesform" method="post" action="index.php?Page=Schedule&Action=Delete&token=keepme">
@@ -1408,6 +1458,33 @@ mod tests {
         assert_eq!(delete.route.identifier_value, 182744);
         assert!(!delete.candidate.row_summary.contains("person@example.com"));
         assert_eq!(delete.candidate.route_fingerprint.len(), 18);
+    }
+
+    #[test]
+    fn parse_table_rows_ignores_nested_container_rows() {
+        let html = r#"
+            <table>
+              <tr>
+                <td>
+                  Results per page: 5 10 20
+                  <table>
+                    <tr><td>Campaign Alpha</td><td>Complete</td></tr>
+                    <tr><td>Campaign Beta</td><td>Paused</td></tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+        "#;
+
+        let rows = parse_table_rows(html, 25).unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            rows,
+            vec![
+                "Campaign Alpha Complete".to_string(),
+                "Campaign Beta Paused".to_string()
+            ]
+        );
     }
 
     #[test]
