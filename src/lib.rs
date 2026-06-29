@@ -50,20 +50,23 @@ pub use config::{AdminHtmlConfig, InterspireServerConfig, InterspireVersion, Xml
 pub use error::InterspireError;
 use mcp_toolkit_core::{
     guarded_action::GuardedActionPosture,
-    mcp_apps::with_mcp_apps_sensitive_output_metadata,
+    mcp_apps::{with_mcp_apps_no_mutation_proof_metadata, with_mcp_apps_sensitive_output_metadata},
     tool_inventory::{ToolCapability, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError},
 };
 pub use response::{
-    AudienceHygieneArtifact, AudienceHygieneExportBeginRequest, AudienceHygieneExportReport,
-    AudienceHygieneExportRequest, AudienceHygieneExportResumeRequest,
-    AudienceHygieneExportStatusRequest, AudienceHygieneListSummary, CampaignReadbackReport,
-    CampaignReadbackRequest, CampaignUpdateApplyRequest, CampaignUpdatePreviewRequest,
-    ContactStateReport, ContactStateRequest, Evidence, FormFieldChange, FormFieldDescriptor,
-    FormFieldUpdate, GuardedWriteApplyReport, GuardedWritePreviewReport, ListOwnerReadbackReport,
-    ListOwnerReadbackRequest, ListSummary, ListSummaryReport, ListSummaryRequest,
-    ListUpdateApplyRequest, ListUpdatePreviewRequest, QueueControlAction, QueueControlApplyReport,
-    QueueControlApplyRequest, QueueControlCandidate, QueueControlPreviewReport,
-    QueueControlPreviewRequest, QueueStatsReadbackReport, QueueStatsReadbackRequest,
+    AdminSessionProbeReport, AdminSessionProbeRequest, AudienceHygieneArtifact,
+    AudienceHygieneExportBeginRequest, AudienceHygieneExportReport, AudienceHygieneExportRequest,
+    AudienceHygieneExportResumeRequest, AudienceHygieneExportStatusRequest,
+    AudienceHygieneListSummary, CampaignBodyAuditReport, CampaignBodyAuditRequest,
+    CampaignReadbackReport, CampaignReadbackRequest, CampaignUpdateApplyRequest,
+    CampaignUpdatePreviewRequest, ContactStateReport, ContactStateRequest, Evidence,
+    FormFieldChange, FormFieldDescriptor, FormFieldUpdate, GuardedWriteApplyReport,
+    GuardedWritePreviewReport, ListOwnerReadbackReport, ListOwnerReadbackRequest, ListSummary,
+    ListSummaryReport, ListSummaryRequest, ListUpdateApplyRequest, ListUpdatePreviewRequest,
+    QueueControlAction, QueueControlApplyReport, QueueControlApplyRequest, QueueControlCandidate,
+    QueueControlPreviewReport, QueueControlPreviewRequest, QueueStatsReadbackReport,
+    QueueStatsReadbackRequest, SeedReadinessGate, SeedReadinessGateReport,
+    SeedReadinessGateRequest, SendWizardReadbackReport, SendWizardReadbackRequest,
     SensitiveFieldDenial, SensitiveFieldQueryReport, SensitiveFieldQueryRequest,
     SensitiveFieldTarget, SensitiveFieldValue, SensitiveToolMetadata, SettingsAuditReport,
     SettingsAuditRequest, SettingsSectionName, SettingsUpdateApplyRequest,
@@ -132,6 +135,10 @@ pub trait InterspireReadBackend: Send + Sync {
         &self,
         request: &SettingsAuditRequest,
     ) -> Result<SettingsAuditReport, InterspireError>;
+    fn admin_session_probe(
+        &self,
+        request: &AdminSessionProbeRequest,
+    ) -> Result<AdminSessionProbeReport, InterspireError>;
     fn user_smtp_readback(
         &self,
         request: &UserSmtpReadbackRequest,
@@ -152,6 +159,18 @@ pub trait InterspireReadBackend: Send + Sync {
         &self,
         request: &CampaignReadbackRequest,
     ) -> Result<CampaignReadbackReport, InterspireError>;
+    fn campaign_body_audit(
+        &self,
+        request: &CampaignBodyAuditRequest,
+    ) -> Result<CampaignBodyAuditReport, InterspireError>;
+    fn send_wizard_readback(
+        &self,
+        request: &SendWizardReadbackRequest,
+    ) -> Result<SendWizardReadbackReport, InterspireError>;
+    fn seed_readiness_gate(
+        &self,
+        request: &SeedReadinessGateRequest,
+    ) -> Result<SeedReadinessGateReport, InterspireError>;
     fn campaign_update_preview(
         &self,
         request: &CampaignUpdatePreviewRequest,
@@ -264,6 +283,13 @@ impl InterspireMcpServer {
                         "Read redacted Interspire global settings for email, bounce, and cron.",
                         ["interspire", "settings", "audit"],
                     )),
+                ToolCapability::new("interspire_admin_session_probe")
+                    .with_group("read")
+                    .with_read_only(true)
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Probe authenticated admin HTML reachability through allowlisted read pages.",
+                        ["interspire", "admin", "session", "probe"],
+                    )),
                 ToolCapability::new("interspire_user_smtp_readback")
                     .with_group("read")
                     .with_read_only(true)
@@ -298,6 +324,27 @@ impl InterspireMcpServer {
                     .with_discovery(ToolDiscoveryMetadata::new(
                         "Read campaign manage rows or one campaign edit page summary.",
                         ["interspire", "campaign", "readback"],
+                    )),
+                ToolCapability::new("interspire_campaign_body_audit")
+                    .with_group("read")
+                    .with_read_only(true)
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Audit redacted campaign body safety signals without returning raw HTML.",
+                        ["interspire", "campaign", "body", "audit"],
+                    )),
+                ToolCapability::new("interspire_send_wizard_readback")
+                    .with_group("read")
+                    .with_risk_posture(GuardedActionPosture::no_mutation_proof())
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Render the send wizard through the no-send preview boundary and verify queue/stat invariants.",
+                        ["interspire", "send", "wizard", "readback", "no-send"],
+                    )),
+                ToolCapability::new("interspire_seed_readiness_gate")
+                    .with_group("read")
+                    .with_risk_posture(GuardedActionPosture::no_mutation_proof())
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Combine campaign body audit and no-send wizard proof into seed-readiness gates.",
+                        ["interspire", "seed", "readiness", "gate", "no-send"],
                     )),
                 ToolCapability::new("interspire_campaign_update_preview")
                     .with_group("guarded-write")
@@ -459,6 +506,16 @@ impl InterspireMcpServer {
         response::tool_json(self.backend.settings_audit(&request))
     }
 
+    #[tool(
+        description = "Probe authenticated admin HTML reachability through allowlisted read pages."
+    )]
+    fn interspire_admin_session_probe(
+        &self,
+        Parameters(request): Parameters<AdminSessionProbeRequest>,
+    ) -> String {
+        response::tool_json(self.backend.admin_session_probe(&request))
+    }
+
     #[tool(description = "Read redacted per-user SMTP override state.")]
     fn interspire_user_smtp_readback(
         &self,
@@ -501,6 +558,34 @@ impl InterspireMcpServer {
         Parameters(request): Parameters<CampaignReadbackRequest>,
     ) -> String {
         response::tool_json(self.backend.campaign_readback(&request))
+    }
+
+    #[tool(description = "Audit redacted campaign body safety signals without returning raw HTML.")]
+    fn interspire_campaign_body_audit(
+        &self,
+        Parameters(request): Parameters<CampaignBodyAuditRequest>,
+    ) -> String {
+        response::tool_json(self.backend.campaign_body_audit(&request))
+    }
+
+    #[tool(
+        description = "Render the send wizard through the no-send preview boundary and verify queue/stat invariants."
+    )]
+    fn interspire_send_wizard_readback(
+        &self,
+        Parameters(request): Parameters<SendWizardReadbackRequest>,
+    ) -> String {
+        response::tool_json(self.backend.send_wizard_readback(&request))
+    }
+
+    #[tool(
+        description = "Combine campaign body audit and no-send wizard proof into seed-readiness gates."
+    )]
+    fn interspire_seed_readiness_gate(
+        &self,
+        Parameters(request): Parameters<SeedReadinessGateRequest>,
+    ) -> String {
+        response::tool_json(self.backend.seed_readiness_gate(&request))
     }
 
     #[tool(description = "Preview guarded campaign content or sender metadata edits.")]
@@ -649,20 +734,51 @@ impl ServerHandler for InterspireMcpServer {
 }
 
 fn with_interspire_tool_metadata(tool: Tool) -> Tool {
-    if tool.name.as_ref() != "interspire_sensitive_field_query" {
-        return tool;
+    match tool.name.as_ref() {
+        "interspire_sensitive_field_query" => {
+            let meta = with_mcp_apps_sensitive_output_metadata(
+                Some(Meta::new()),
+                "unredacted_admin_form_values",
+            );
+            tool.with_annotations(
+                ToolAnnotations::with_title("Sensitive field query")
+                    .read_only(true)
+                    .destructive(false)
+                    .idempotent(true)
+                    .open_world(false),
+            )
+            .with_meta(meta)
+        }
+        "interspire_send_wizard_readback" => {
+            let meta = with_mcp_apps_no_mutation_proof_metadata(
+                Some(Meta::new()),
+                "render Send wizard Step2/final editable page without submitting the final send boundary",
+            );
+            tool.with_annotations(
+                ToolAnnotations::with_title("Send wizard readback")
+                    .read_only(true)
+                    .destructive(false)
+                    .idempotent(true)
+                    .open_world(false),
+            )
+            .with_meta(meta)
+        }
+        "interspire_seed_readiness_gate" => {
+            let meta = with_mcp_apps_no_mutation_proof_metadata(
+                Some(Meta::new()),
+                "combine campaign audit and Send wizard readback without submitting a seed or production send",
+            );
+            tool.with_annotations(
+                ToolAnnotations::with_title("Seed readiness gate")
+                    .read_only(true)
+                    .destructive(false)
+                    .idempotent(true)
+                    .open_world(false),
+            )
+            .with_meta(meta)
+        }
+        _ => tool,
     }
-
-    let meta =
-        with_mcp_apps_sensitive_output_metadata(Some(Meta::new()), "unredacted_admin_form_values");
-    tool.with_annotations(
-        ToolAnnotations::with_title("Sensitive field query")
-            .read_only(true)
-            .destructive(false)
-            .idempotent(true)
-            .open_world(false),
-    )
-    .with_meta(meta)
 }
 
 #[cfg(test)]
@@ -706,6 +822,13 @@ mod tests {
             Ok(SettingsAuditReport::fixture())
         }
 
+        fn admin_session_probe(
+            &self,
+            _request: &AdminSessionProbeRequest,
+        ) -> Result<AdminSessionProbeReport, InterspireError> {
+            Ok(AdminSessionProbeReport::fixture())
+        }
+
         fn user_smtp_readback(
             &self,
             _request: &UserSmtpReadbackRequest,
@@ -739,6 +862,27 @@ mod tests {
             _request: &CampaignReadbackRequest,
         ) -> Result<CampaignReadbackReport, InterspireError> {
             Ok(CampaignReadbackReport::fixture())
+        }
+
+        fn campaign_body_audit(
+            &self,
+            _request: &CampaignBodyAuditRequest,
+        ) -> Result<CampaignBodyAuditReport, InterspireError> {
+            Ok(CampaignBodyAuditReport::fixture())
+        }
+
+        fn send_wizard_readback(
+            &self,
+            _request: &SendWizardReadbackRequest,
+        ) -> Result<SendWizardReadbackReport, InterspireError> {
+            Ok(SendWizardReadbackReport::fixture())
+        }
+
+        fn seed_readiness_gate(
+            &self,
+            _request: &SeedReadinessGateRequest,
+        ) -> Result<SeedReadinessGateReport, InterspireError> {
+            Ok(SeedReadinessGateReport::fixture())
         }
 
         fn campaign_update_preview(
@@ -884,10 +1028,12 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "interspire_admin_session_probe",
                 "interspire_audience_hygiene_export",
                 "interspire_audience_hygiene_export_begin",
                 "interspire_audience_hygiene_export_resume",
                 "interspire_audience_hygiene_export_status",
+                "interspire_campaign_body_audit",
                 "interspire_campaign_readback",
                 "interspire_campaign_update_apply",
                 "interspire_campaign_update_preview",
@@ -899,6 +1045,8 @@ mod tests {
                 "interspire_queue_control_apply",
                 "interspire_queue_control_preview",
                 "interspire_queue_stats_readback",
+                "interspire_seed_readiness_gate",
+                "interspire_send_wizard_readback",
                 "interspire_sensitive_field_query",
                 "interspire_settings_audit",
                 "interspire_settings_update_apply",
@@ -946,5 +1094,43 @@ mod tests {
                 .and_then(|annotations| annotations.read_only_hint),
             Some(true)
         );
+    }
+
+    #[test]
+    fn no_mutation_proof_descriptors_mark_the_proof_boundary() {
+        let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend))
+            .unwrap_or_else(|err| panic!("server inventory must build: {err}"));
+        let tools = server.tool_schema_snapshot();
+
+        for name in [
+            "interspire_send_wizard_readback",
+            "interspire_seed_readiness_gate",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool.name.as_ref() == name)
+                .unwrap_or_else(|| panic!("{name} should be listed"));
+            let meta = tool
+                .meta
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} should include Apps metadata"));
+
+            assert_eq!(
+                meta.0["operation_class"],
+                serde_json::json!("no_mutation_proof")
+            );
+            assert_eq!(meta.0["mutation_prohibited"], serde_json::json!(true));
+            assert_eq!(
+                meta.0["production_action_authorized"],
+                serde_json::json!(false)
+            );
+            assert_eq!(meta.0["openai/widgetAccessible"], serde_json::json!(false));
+            assert_eq!(
+                tool.annotations
+                    .as_ref()
+                    .and_then(|annotations| annotations.read_only_hint),
+                Some(true)
+            );
+        }
     }
 }

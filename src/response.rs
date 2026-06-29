@@ -9,11 +9,13 @@ mod audience;
 mod common;
 mod forms;
 mod queue;
+mod send_wizard;
 
 pub use audience::*;
 pub use common::*;
 pub use forms::*;
 pub use queue::*;
+pub use send_wizard::*;
 
 pub fn sensitive_field_query_metadata() -> SensitiveToolMetadata {
     let meta = mcp_toolkit_core::mcp_apps::with_mcp_apps_sensitive_output_metadata(

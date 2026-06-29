@@ -12,10 +12,10 @@ publish = false
 csv = "1.4.0"
 hex = "0.4.3"
 libc = "0.2.186"
-mcp-toolkit = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "358f5da30f898451fe8b9a3acf0ae2237a88a1dd", features = ["server-stdio"] }
-mcp-toolkit-core = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "358f5da30f898451fe8b9a3acf0ae2237a88a1dd" }
-mcp-toolkit-observability = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "358f5da30f898451fe8b9a3acf0ae2237a88a1dd" }
-mcp-toolkit-policy-core = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "358f5da30f898451fe8b9a3acf0ae2237a88a1dd" }
+mcp-toolkit = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "aa0fbced690f80f0d04396b99f18c5fce833a73c", features = ["server-stdio"] }
+mcp-toolkit-core = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "aa0fbced690f80f0d04396b99f18c5fce833a73c" }
+mcp-toolkit-observability = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "aa0fbced690f80f0d04396b99f18c5fce833a73c" }
+mcp-toolkit-policy-core = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "aa0fbced690f80f0d04396b99f18c5fce833a73c" }
 reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "cookies", "rustls-tls"] }
 rmcp = { version = "=1.8.0", default-features = false, features = ["macros", "schemars", "server", "transport-io"] }
 roxmltree = "0.21.1"
@@ -30,4 +30,4 @@ tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
 url = "2.5.7"
 
 [dev-dependencies]
-mcp-toolkit-testing = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "358f5da30f898451fe8b9a3acf0ae2237a88a1dd" }
+mcp-toolkit-testing = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "aa0fbced690f80f0d04396b99f18c5fce833a73c" }

@@ -2,6 +2,21 @@
   "schema": "mcp_tool_schema_snapshot",
   "tools": [
     {
+      "description": "Probe authenticated admin HTML reachability through allowlisted read pages.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "include_send_start": {
+            "default": false,
+            "description": "Also prove the Send wizard start page can be read after login.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "name": "interspire_admin_session_probe"
+    },
+    {
       "description": "Export explicitly requested Interspire audience hygiene artifacts privately and return aggregate counts only.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -134,6 +149,24 @@
         "type": "object"
       },
       "name": "interspire_audience_hygiene_export_status"
+    },
+    {
+      "description": "Audit redacted campaign body safety signals without returning raw HTML.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "campaign_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "campaign_id"
+        ],
+        "type": "object"
+      },
+      "name": "interspire_campaign_body_audit"
     },
     {
       "description": "Read campaign manage rows or one campaign edit page summary.",
@@ -506,6 +539,158 @@
         "type": "object"
       },
       "name": "interspire_queue_stats_readback"
+    },
+    {
+      "_meta": {
+        "approval_required": false,
+        "mutation_prohibited": true,
+        "openai/widgetAccessible": false,
+        "operation_class": "no_mutation_proof",
+        "production_action_authorized": false,
+        "proof_boundary": "combine campaign audit and Send wizard readback without submitting a seed or production send",
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "ui": {
+          "visibility": [
+            "model"
+          ]
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Seed readiness gate"
+      },
+      "description": "Combine campaign body audit and no-send wizard proof into seed-readiness gates.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "campaign_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "expected_from_email": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_recipient_count": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "expected_reply_to_email": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "list_ids": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "campaign_id",
+          "list_ids"
+        ],
+        "type": "object"
+      },
+      "name": "interspire_seed_readiness_gate"
+    },
+    {
+      "_meta": {
+        "approval_required": false,
+        "mutation_prohibited": true,
+        "openai/widgetAccessible": false,
+        "operation_class": "no_mutation_proof",
+        "production_action_authorized": false,
+        "proof_boundary": "render Send wizard Step2/final editable page without submitting the final send boundary",
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "ui": {
+          "visibility": [
+            "model"
+          ]
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Send wizard readback"
+      },
+      "description": "Render the send wizard through the no-send preview boundary and verify queue/stat invariants.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "campaign_id": {
+            "description": "Interspire campaign/newsletter id expected on the final editable send form.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "expected_recipient_count": {
+            "default": null,
+            "description": "Optional expected recipient count. When provided, a mismatch is reported as a warning.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "list_ids": {
+            "description": "Interspire list ids to select for the no-send wizard proof.",
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "max_queue_rows": {
+            "default": null,
+            "description": "Maximum queue/stat rows to compare before and after the no-send wizard render.",
+            "format": "uint",
+            "maximum": 100,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "campaign_id",
+          "list_ids"
+        ],
+        "type": "object"
+      },
+      "name": "interspire_send_wizard_readback"
     },
     {
       "_meta": {

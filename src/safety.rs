@@ -19,6 +19,7 @@ pub enum AdminReadPage {
     UserEdit { id: u64 },
     NewslettersManage,
     NewsletterEdit { id: u64 },
+    SendStart,
     Schedule,
     Stats,
 }
@@ -59,6 +60,7 @@ impl AdminReadPage {
             Self::NewsletterEdit { id } => {
                 format!("index.php?Page=Newsletters&Action=Edit&id={id}")
             }
+            Self::SendStart => "index.php?Page=Send".to_string(),
             Self::Schedule => "index.php?Page=Schedule".to_string(),
             Self::Stats => "index.php?Page=Stats".to_string(),
         }
@@ -113,6 +115,23 @@ pub fn ensure_allowed_queue_control_delete_post(
     ensure_admin_base_scope(&base, &url)?;
     ensure_admin_front_controller_path(&base, &url)?;
     classify_allowed_queue_control_delete_post(&url)?;
+    Ok(url)
+}
+
+pub fn ensure_allowed_send_wizard_step2_post(
+    base_url: &str,
+    relative_path: &str,
+) -> Result<Url, InterspireError> {
+    let base = Url::parse(base_url)
+        .map_err(|err| InterspireError::Safety(format!("invalid admin base url: {err}")))?;
+    let base = normalize_admin_base(base);
+    let url = base.join(relative_path).map_err(|err| {
+        InterspireError::Safety(format!("invalid send wizard proof post path: {err}"))
+    })?;
+
+    ensure_admin_base_scope(&base, &url)?;
+    ensure_admin_front_controller_path(&base, &url)?;
+    classify_allowed_send_wizard_step2_post(&url)?;
     Ok(url)
 }
 
@@ -212,6 +231,7 @@ pub fn classify_allowed_admin_get(url: &Url) -> Result<AdminReadPage, Interspire
                 })?;
             Ok(AdminReadPage::NewsletterEdit { id })
         }
+        (Some("Send"), None) if only_query_keys(&pairs, &["Page"]) => Ok(AdminReadPage::SendStart),
         (Some("Schedule"), None) if only_query_keys(&pairs, &["Page"]) => {
             Ok(AdminReadPage::Schedule)
         }
@@ -220,6 +240,47 @@ pub fn classify_allowed_admin_get(url: &Url) -> Result<AdminReadPage, Interspire
             "admin GET is not in the read allowlist: Page={page:?} Action={action:?}"
         ))),
     }
+}
+
+pub fn classify_allowed_send_wizard_step2_post(url: &Url) -> Result<(), InterspireError> {
+    if url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .is_none_or(|segment| segment != "index.php")
+    {
+        return Err(InterspireError::Safety(
+            "send wizard proof post path is not index.php".to_string(),
+        ));
+    }
+
+    let pairs = url.query_pairs().collect::<Vec<_>>();
+    ensure_no_duplicate_query_keys(&pairs)?;
+    ensure_only_query_keys(
+        &pairs,
+        &["Page", "Action", "token", "csrf", "csrf_token", "_token"],
+    )?;
+
+    let page = pairs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("Page"))
+        .map(|(_, value)| value.to_string());
+    let action = pairs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("Action"))
+        .map(|(_, value)| value.to_string());
+
+    if !matches!(page.as_deref(), Some("Send")) {
+        return Err(InterspireError::Safety(
+            "send wizard proof post must target the Send page".to_string(),
+        ));
+    }
+    if !matches!(action.as_deref(), Some("Step2")) {
+        return Err(InterspireError::Safety(format!(
+            "send wizard proof post action is not the no-send Step2 allowlist: {action:?}"
+        )));
+    }
+
+    Ok(())
 }
 
 pub fn classify_allowed_queue_control(url: &Url) -> Result<QueueControlRoute, InterspireError> {
@@ -787,6 +848,32 @@ mod tests {
         )
         .unwrap_or_else(|err| panic!("{err}"));
         assert!(delete.as_str().contains("Page=Schedule&Action=Delete"));
+    }
+
+    #[test]
+    fn allows_only_send_wizard_step2_proof_post() {
+        let base_url = "https://example.test/admin/";
+        let step2 = ensure_allowed_send_wizard_step2_post(
+            base_url,
+            "index.php?Page=Send&Action=Step2&token=abc",
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert!(step2.as_str().contains("Page=Send&Action=Step2"));
+
+        for path in [
+            "index.php?Page=Send&Action=Step3",
+            "index.php?Page=Send&Action=Step4",
+            "index.php?Page=Send&Action=Send",
+            "index.php?Page=Send&Action=Schedule",
+            "index.php?Page=Send&Action=Step2&Action=Send",
+            "index.php?Page=Newsletters&Action=Step2",
+            "cron/index.php?Page=Send&Action=Step2",
+        ] {
+            assert!(
+                ensure_allowed_send_wizard_step2_post(base_url, path).is_err(),
+                "{path} should be blocked"
+            );
+        }
     }
 
     #[test]

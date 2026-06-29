@@ -10,6 +10,8 @@ question without creating a new way to send mail or corrupt list state.
 - Queue-control writes are separately disabled by default.
 - Form-write controls are separately disabled by default.
 - Guarded apply defaults to `preview_apply`, not direct mutation.
+- No-mutation proof tools may render allowlisted read/proof pages, but they
+  must not submit a send, schedule, import, contact, or suppression action.
 - Sensitive reads are disabled by default and require explicit acknowledgement.
 - Private audience exports require an explicit private artifact root.
 - Tool output is redacted and aggregate wherever raw recipient or credential
@@ -59,6 +61,7 @@ paths:
 - users and user edit pages;
 - newsletter manage and edit pages;
 - schedule and stats pages.
+- the Send page only for the reviewed no-send Step2 proof boundary.
 
 Extra query parameters, duplicate query keys, path escapes, cross-origin URLs,
 and send/import/export/contact mutation paths are blocked before HTTP requests
@@ -69,6 +72,12 @@ behind allowlisted routes and parsers, redacts extracted values, and avoids
 returning raw pages to the MCP client. Hidden fields, selected options, and
 checked state are captured only for guarded preview/apply form workflows, then
 re-read after apply to prove what persisted.
+
+The Send page allowlist is narrower than the ordinary read-page allowlist. It
+exists only so `interspire_send_wizard_readback` can render the Step2/final
+editable wizard state and then stop before the final send boundary. Step3,
+Step4, send, schedule, import, export, cron, and contact/suppression paths stay
+blocked.
 
 ## Preview/Apply As Transaction Guard
 
@@ -138,6 +147,31 @@ password fields, contact state, or suppression state.
 
 Form apply does not authorize sending and does not mutate contacts,
 suppression state, import/export state, provider APIs, or DNS.
+
+## No-Mutation Send Proof
+
+The send-readiness tools deliberately sit between ordinary readback and
+guarded writes:
+
+- `interspire_admin_session_probe` checks authenticated admin reachability
+  through allowlisted read pages.
+- `interspire_campaign_body_audit` counts redacted campaign-body signals such
+  as unsubscribe tokens, link protocol mix, image-alt coverage, and visible
+  tracking-pixel text without returning raw HTML.
+- `interspire_send_wizard_readback` posts only to the allowlisted Send Step2
+  proof route, parses the resulting final editable wizard page, and never posts
+  that final form.
+- `interspire_seed_readiness_gate` combines campaign-body and wizard evidence
+  into review gates without approving a seed or production send.
+
+The wizard proof records Schedule and Stats rows before and after the Step2
+render. Output includes invariant evidence and explicit negative flags such as
+`send_performed: false`, `scheduled: false`, and
+`production_send_authorized: false`.
+
+These tools do not bypass the absent send/schedule surface. They provide
+evidence that an operator can review before using a separately approved send
+path.
 
 ## Sensitive Field Query
 

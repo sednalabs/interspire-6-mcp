@@ -1,18 +1,24 @@
 use interspire_mcp::{
-    AudienceHygieneExportBeginRequest, AudienceHygieneExportReport, AudienceHygieneExportRequest,
-    AudienceHygieneExportResumeRequest, AudienceHygieneExportStatusRequest, CampaignReadbackReport,
-    CampaignReadbackRequest, CampaignUpdateApplyRequest, CampaignUpdatePreviewRequest,
-    ContactStateReport, ContactStateRequest, Evidence, GuardedWriteApplyReport,
-    GuardedWritePreviewReport, InterspireError, InterspireMcpServer, InterspireReadBackend,
-    ListOwnerReadbackReport, ListOwnerReadbackRequest, ListSummary, ListSummaryReport,
-    ListSummaryRequest, ListUpdateApplyRequest, ListUpdatePreviewRequest, QueueControlApplyReport,
-    QueueControlApplyRequest, QueueControlPreviewReport, QueueControlPreviewRequest,
-    QueueStatsReadbackReport, QueueStatsReadbackRequest, SensitiveFieldQueryReport,
-    SensitiveFieldQueryRequest, SettingsAuditReport, SettingsAuditRequest,
-    SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport, StatusRequest,
-    UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
-    UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
-    DEFAULT_LIST_READ_LIMIT, HARD_LIST_READ_LIMIT,
+    AdminSessionProbeReport, AdminSessionProbeRequest, AudienceHygieneExportBeginRequest,
+    AudienceHygieneExportReport, AudienceHygieneExportRequest, AudienceHygieneExportResumeRequest,
+    AudienceHygieneExportStatusRequest, CampaignBodyAuditReport, CampaignBodyAuditRequest,
+    CampaignReadbackReport, CampaignReadbackRequest, CampaignUpdateApplyRequest,
+    CampaignUpdatePreviewRequest, ContactStateReport, ContactStateRequest, Evidence,
+    GuardedWriteApplyReport, GuardedWritePreviewReport, InterspireError, InterspireMcpServer,
+    InterspireReadBackend, ListOwnerReadbackReport, ListOwnerReadbackRequest, ListSummary,
+    ListSummaryReport, ListSummaryRequest, ListUpdateApplyRequest, ListUpdatePreviewRequest,
+    QueueControlApplyReport, QueueControlApplyRequest, QueueControlPreviewReport,
+    QueueControlPreviewRequest, QueueStatsReadbackReport, QueueStatsReadbackRequest,
+    SeedReadinessGateReport, SeedReadinessGateRequest, SendWizardReadbackReport,
+    SendWizardReadbackRequest, SensitiveFieldQueryReport, SensitiveFieldQueryRequest,
+    SettingsAuditReport, SettingsAuditRequest, SettingsUpdateApplyRequest,
+    SettingsUpdatePreviewRequest, StatusReport, StatusRequest, UserSmtpReadbackReport,
+    UserSmtpReadbackRequest, UserUpdateApplyRequest, UserUpdatePreviewRequest,
+    WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest, DEFAULT_LIST_READ_LIMIT,
+    HARD_LIST_READ_LIMIT,
+};
+use mcp_toolkit_testing::response_safety_contract::{
+    assert_json_bool_field_false, assert_payload_excludes_substrings,
 };
 use std::sync::Arc;
 
@@ -52,6 +58,13 @@ impl InterspireReadBackend for ContractBackend {
         Ok(SettingsAuditReport::fixture())
     }
 
+    fn admin_session_probe(
+        &self,
+        _request: &AdminSessionProbeRequest,
+    ) -> Result<AdminSessionProbeReport, InterspireError> {
+        Ok(AdminSessionProbeReport::fixture())
+    }
+
     fn user_smtp_readback(
         &self,
         _request: &UserSmtpReadbackRequest,
@@ -85,6 +98,27 @@ impl InterspireReadBackend for ContractBackend {
         _request: &CampaignReadbackRequest,
     ) -> Result<CampaignReadbackReport, InterspireError> {
         Ok(CampaignReadbackReport::fixture())
+    }
+
+    fn campaign_body_audit(
+        &self,
+        _request: &CampaignBodyAuditRequest,
+    ) -> Result<CampaignBodyAuditReport, InterspireError> {
+        Ok(CampaignBodyAuditReport::fixture())
+    }
+
+    fn send_wizard_readback(
+        &self,
+        _request: &SendWizardReadbackRequest,
+    ) -> Result<SendWizardReadbackReport, InterspireError> {
+        Ok(SendWizardReadbackReport::fixture())
+    }
+
+    fn seed_readiness_gate(
+        &self,
+        _request: &SeedReadinessGateRequest,
+    ) -> Result<SeedReadinessGateReport, InterspireError> {
+        Ok(SeedReadinessGateReport::fixture())
     }
 
     fn campaign_update_preview(
@@ -305,6 +339,18 @@ fn status_contract_is_redacted_and_read_only() {
     assert!(report
         .capabilities
         .contains(&"interspire_sensitive_field_query".to_string()));
+    assert!(report
+        .capabilities
+        .contains(&"interspire_admin_session_probe".to_string()));
+    assert!(report
+        .capabilities
+        .contains(&"interspire_campaign_body_audit".to_string()));
+    assert!(report
+        .capabilities
+        .contains(&"interspire_send_wizard_readback".to_string()));
+    assert!(report
+        .capabilities
+        .contains(&"interspire_seed_readiness_gate".to_string()));
     assert!(!report.guarded_writes_enabled);
     assert!(!report.queue_controls_enabled);
 }
@@ -491,10 +537,99 @@ fn queue_control_apply_contract_does_not_mutate_lists_or_authorize_send() {
 }
 
 #[test]
+fn admin_session_probe_contract_is_read_only() {
+    let report = ContractBackend
+        .admin_session_probe(&AdminSessionProbeRequest {
+            include_send_start: true,
+        })
+        .unwrap_or_else(|err| panic!("{err}"));
+    let body = serde_json::to_string(&report).unwrap_or_else(|err| panic!("{err}"));
+
+    assert!(report.ok);
+    assert!(report.login_established);
+    assert_eq!(report.send_start_page_read, Some(true));
+    assert!(!body.contains("password"));
+    assert!(!body.contains("cookie"));
+}
+
+#[test]
+fn campaign_body_audit_contract_is_redacted_and_not_send_authorization() {
+    let report = ContractBackend
+        .campaign_body_audit(&CampaignBodyAuditRequest { campaign_id: 7 })
+        .unwrap_or_else(|err| panic!("{err}"));
+    let body = serde_json::to_string(&report).unwrap_or_else(|err| panic!("{err}"));
+
+    assert!(report.ok);
+    assert_eq!(report.unsubscribe_token_count, 1);
+    assert_eq!(report.http_url_count, 0);
+    assert!(!report.visible_tracking_copy_detected);
+    assert!(!report.production_send_authorized);
+    assert!(report.html_sha256.is_some());
+    assert!(!body.contains("<html"));
+    assert!(!body.contains("%%UNSUBSCRIBELINK%%"));
+}
+
+#[test]
+fn send_wizard_readback_contract_is_no_send_boundary() {
+    let report = ContractBackend
+        .send_wizard_readback(&SendWizardReadbackRequest {
+            campaign_id: 7,
+            list_ids: vec![3],
+            expected_recipient_count: Some(1),
+            max_queue_rows: Some(25),
+        })
+        .unwrap_or_else(|err| panic!("{err}"));
+    let body = serde_json::to_string(&report).unwrap_or_else(|err| panic!("{err}"));
+
+    assert!(report.ok);
+    assert_eq!(report.selected_campaign_id, Some(7));
+    assert_eq!(report.selected_list_ids, vec![3]);
+    assert!(report.final_form_posts_to_send_boundary);
+    assert!(report.queue_unchanged);
+    assert!(report.stats_unchanged);
+    assert_json_bool_field_false(&report, "send_performed");
+    assert_json_bool_field_false(&report, "scheduled");
+    assert_json_bool_field_false(&report, "production_send_authorized");
+    assert_payload_excludes_substrings(
+        &report,
+        &[
+            "sender@example.invalid",
+            "editor@example.invalid",
+            "bounces@example.invalid",
+        ],
+    );
+    assert!(!body.contains("index.php"));
+}
+
+#[test]
+fn seed_readiness_gate_contract_is_not_send_approval() {
+    let report = ContractBackend
+        .seed_readiness_gate(&SeedReadinessGateRequest {
+            campaign_id: 7,
+            list_ids: vec![3],
+            expected_recipient_count: Some(1),
+            expected_from_email: Some("sender@example.invalid".to_string()),
+            expected_reply_to_email: Some("editor@example.invalid".to_string()),
+        })
+        .unwrap_or_else(|err| panic!("{err}"));
+    let body = serde_json::to_string(&report).unwrap_or_else(|err| panic!("{err}"));
+
+    assert!(report.ok);
+    assert!(report.ready_for_seed_approval);
+    assert_json_bool_field_false(&report, "production_send_authorized");
+    assert!(report.gates.iter().all(|gate| gate.passed));
+    assert_payload_excludes_substrings(
+        &report,
+        &["sender@example.invalid", "editor@example.invalid"],
+    );
+    assert!(!body.contains("smtp-password"));
+}
+
+#[test]
 fn server_can_be_constructed_with_fixture_backend() {
     let server = InterspireMcpServer::with_backend(Arc::new(ContractBackend))
         .unwrap_or_else(|err| panic!("{err}"));
-    assert_eq!(server.tool_schema_snapshot().len(), 24);
+    assert_eq!(server.tool_schema_snapshot().len(), 28);
 }
 
 #[test]

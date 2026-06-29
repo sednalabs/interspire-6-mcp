@@ -15,19 +15,22 @@ use crate::{
     config::InterspireServerConfig,
     error::InterspireError,
     response::{
-        AudienceHygieneExportBeginRequest, AudienceHygieneExportReport,
-        AudienceHygieneExportRequest, AudienceHygieneExportResumeRequest,
-        AudienceHygieneExportStatusRequest, CampaignReadbackReport, CampaignReadbackRequest,
-        CampaignUpdateApplyRequest, CampaignUpdatePreviewRequest, ContactStateReport,
-        ContactStateRequest, GuardedWriteApplyReport, GuardedWritePreviewReport,
-        ListOwnerReadbackReport, ListOwnerReadbackRequest, ListSummaryReport, ListSummaryRequest,
-        ListUpdateApplyRequest, ListUpdatePreviewRequest, QueueControlApplyReport,
-        QueueControlApplyRequest, QueueControlPreviewReport, QueueControlPreviewRequest,
-        QueueStatsReadbackReport, QueueStatsReadbackRequest, SensitiveFieldQueryReport,
-        SensitiveFieldQueryRequest, SettingsAuditReport, SettingsAuditRequest,
-        SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport, StatusRequest,
-        UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
-        UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
+        AdminSessionProbeReport, AdminSessionProbeRequest, AudienceHygieneExportBeginRequest,
+        AudienceHygieneExportReport, AudienceHygieneExportRequest,
+        AudienceHygieneExportResumeRequest, AudienceHygieneExportStatusRequest,
+        CampaignBodyAuditReport, CampaignBodyAuditRequest, CampaignReadbackReport,
+        CampaignReadbackRequest, CampaignUpdateApplyRequest, CampaignUpdatePreviewRequest,
+        ContactStateReport, ContactStateRequest, GuardedWriteApplyReport,
+        GuardedWritePreviewReport, ListOwnerReadbackReport, ListOwnerReadbackRequest,
+        ListSummaryReport, ListSummaryRequest, ListUpdateApplyRequest, ListUpdatePreviewRequest,
+        QueueControlApplyReport, QueueControlApplyRequest, QueueControlPreviewReport,
+        QueueControlPreviewRequest, QueueStatsReadbackReport, QueueStatsReadbackRequest,
+        SeedReadinessGateReport, SeedReadinessGateRequest, SendWizardReadbackReport,
+        SendWizardReadbackRequest, SensitiveFieldQueryReport, SensitiveFieldQueryRequest,
+        SettingsAuditReport, SettingsAuditRequest, SettingsUpdateApplyRequest,
+        SettingsUpdatePreviewRequest, StatusReport, StatusRequest, UserSmtpReadbackReport,
+        UserSmtpReadbackRequest, UserUpdateApplyRequest, UserUpdatePreviewRequest,
+        WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
     },
     xml_api::XmlApiClient,
     InterspireReadBackend,
@@ -85,6 +88,14 @@ impl InterspireReadBackend for LiveInterspireBackend {
         self.settings_audit_impl(request)
     }
 
+    fn admin_session_probe(
+        &self,
+        request: &AdminSessionProbeRequest,
+    ) -> Result<AdminSessionProbeReport, InterspireError> {
+        let html = self.html_client()?;
+        html.admin_session_probe(request.include_send_start)
+    }
+
     fn user_smtp_readback(
         &self,
         request: &UserSmtpReadbackRequest,
@@ -118,6 +129,30 @@ impl InterspireReadBackend for LiveInterspireBackend {
         request: &CampaignReadbackRequest,
     ) -> Result<CampaignReadbackReport, InterspireError> {
         self.campaign_readback_impl(request)
+    }
+
+    fn campaign_body_audit(
+        &self,
+        request: &CampaignBodyAuditRequest,
+    ) -> Result<CampaignBodyAuditReport, InterspireError> {
+        let html = self.html_client()?;
+        html.campaign_body_audit(request.campaign_id)
+    }
+
+    fn send_wizard_readback(
+        &self,
+        request: &SendWizardReadbackRequest,
+    ) -> Result<SendWizardReadbackReport, InterspireError> {
+        let html = self.html_client()?;
+        html.send_wizard_readback(request)
+    }
+
+    fn seed_readiness_gate(
+        &self,
+        request: &SeedReadinessGateRequest,
+    ) -> Result<SeedReadinessGateReport, InterspireError> {
+        let html = self.html_client()?;
+        html.seed_readiness_gate(request)
     }
 
     fn campaign_update_preview(

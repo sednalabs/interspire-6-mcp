@@ -76,11 +76,15 @@ questions, not for generic administrative access.
 | `interspire_contact_state` | Read | Check one redacted contact's XML list presence, with low-confidence warnings for uncorroborated absence. |
 | `interspire_list_owner_readback` | Read | Read list owner, reply-to, and bounce metadata. |
 | `interspire_settings_audit` | Read | Read redacted global email, bounce, and cron settings. |
+| `interspire_admin_session_probe` | Read | Probe authenticated admin reachability through allowlisted read pages. |
 | `interspire_user_smtp_readback` | Read | Read redacted per-user SMTP override state. |
 | `interspire_queue_stats_readback` | Read | Read scheduled queue and stats rows without triggering cron. |
 | `interspire_queue_control_preview` | Read preview | Build plan IDs for cancel/delete actions found on the schedule page. |
 | `interspire_queue_control_apply` | Guarded apply | Apply one previously previewed queue cancel/delete plan when write gates are enabled. |
 | `interspire_campaign_readback` | Read | Read campaign rows or one campaign edit-page summary. |
+| `interspire_campaign_body_audit` | Read | Audit redacted campaign body safety signals without returning raw HTML. |
+| `interspire_send_wizard_readback` | No-mutation proof | Render the Send wizard through the no-send proof boundary and verify queue/stat invariants. |
+| `interspire_seed_readiness_gate` | No-mutation proof | Combine campaign body audit and Send wizard readback into seed-readiness gates. |
 | `interspire_campaign_update_preview` | Read preview | Preview guarded campaign content or sender-metadata edits. |
 | `interspire_campaign_update_apply` | Guarded apply | Apply one previously previewed campaign edit when guarded form-write gates are enabled. |
 | `interspire_list_update_preview` | Read preview | Preview guarded list metadata edits. |
@@ -284,6 +288,22 @@ suppression mutations, or send controls.
 This phase intentionally does not expose send, schedule, cron-trigger,
 contact-mutation, suppression-mutation, SMTP password, bounce password,
 provider APIs, or DNS tools.
+
+### No-Mutation Send Proof
+
+The send-readiness tools are proof tools, not send tools. They can inspect an
+admin session, audit a redacted campaign body, and render the Send wizard only
+through the reviewed no-send Step2 boundary. The final editable send form may
+be parsed to prove selected campaign/list metadata, recipient estimates,
+tracking checkboxes, sender fields, and form fingerprints, but it is never
+submitted.
+
+`interspire_send_wizard_readback` records Schedule and Stats rows before and
+after the proof render and reports whether those invariants changed.
+`interspire_seed_readiness_gate` combines that proof with campaign-body safety
+signals so an operator can decide what still needs review before a seed send in
+another approved system. Both tools report `send_performed: false`,
+`scheduled: false`, and `production_send_authorized: false`.
 
 See [Safety Model](docs/safety-model.md).
 
