@@ -163,7 +163,11 @@ guarded writes:
   the final Complete/save form.
 - `interspire_send_wizard_readback` posts only to the allowlisted Send Step2
   proof route, parses the resulting final editable wizard page, and never posts
-  that final form.
+  that final form. Interspire 8.x may render the requested campaign as an
+  available campaign option instead of a selected value and may echo only the
+  resulting recipient count rather than the selected list ids; when an operator
+  supplied an expected recipient count, the proof can record that as list-session
+  evidence while still treating the next form as a blocked send boundary.
 - `interspire_seed_readiness_gate` combines campaign-body and wizard evidence
   into review gates without approving a seed or production send.
 

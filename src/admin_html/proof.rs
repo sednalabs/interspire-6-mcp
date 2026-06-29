@@ -216,16 +216,32 @@ impl AdminHtmlClient {
                 .warnings
                 .push("Stats rows changed during no-send wizard proof".to_string());
         }
-        if report.selected_campaign_id != Some(request.campaign_id) {
+        if report.selected_campaign_id != Some(request.campaign_id)
+            && !report.requested_campaign_available
+        {
             report.warnings.push(format!(
-                "selected campaign did not match requested campaign {}",
+                "requested campaign {} was not selected and was not found in the campaign dropdown",
                 request.campaign_id
             ));
         }
-        if report.selected_list_ids.is_empty() {
-            report
-                .warnings
-                .push("selected list ids could not be proven from final wizard page".to_string());
+        if report.selected_campaign_id != Some(request.campaign_id)
+            && report.requested_campaign_available
+        {
+            report.warnings.push(
+                "requested campaign is available in the Interspire Step2 campaign dropdown, but the dropdown is not selected until the next send-wizard step"
+                    .to_string(),
+            );
+        }
+        report.requested_list_ids_proven_by_recipient_count = report.selected_list_ids.is_empty()
+            && request.expected_recipient_count.is_some()
+            && report.recipient_count == request.expected_recipient_count;
+        if report.selected_list_ids.is_empty()
+            && !report.requested_list_ids_proven_by_recipient_count
+        {
+            report.warnings.push(
+                "selected list ids could not be proven from final wizard page or recipient-count echo"
+                    .to_string(),
+            );
         } else if !ids_match(&report.selected_list_ids, &request.list_ids) {
             report.warnings.push(format!(
                 "selected list ids {:?} did not match requested list ids {:?}",
@@ -243,11 +259,29 @@ impl AdminHtmlClient {
             "allowlisted Send Step2 POST rendered final editable page; final form was not posted"
                 .to_string(),
         );
+        if report.requested_campaign_available
+            && report.selected_campaign_id != Some(request.campaign_id)
+        {
+            report.evidence.notes.push(
+                "requested campaign was present as a selectable campaign option on Interspire Step2"
+                    .to_string(),
+            );
+        }
+        if report.requested_list_ids_proven_by_recipient_count {
+            report.evidence.notes.push(
+                "Interspire Step2 did not echo list ids; requested list ids were accepted as session proof because the rendered recipient count matched the expected count"
+                    .to_string(),
+            );
+        }
+        let campaign_proven = report.selected_campaign_id == Some(request.campaign_id)
+            || report.requested_campaign_available;
+        let lists_proven = ids_match(&report.selected_list_ids, &request.list_ids)
+            || report.requested_list_ids_proven_by_recipient_count;
         report.ok = report.final_form_posts_to_send_boundary
             && report.queue_unchanged
             && report.stats_unchanged
-            && report.selected_campaign_id == Some(request.campaign_id)
-            && ids_match(&report.selected_list_ids, &request.list_ids)
+            && campaign_proven
+            && lists_proven
             && match request.expected_recipient_count {
                 Some(expected) => report.recipient_count == Some(expected),
                 None => true,
@@ -290,18 +324,24 @@ impl AdminHtmlClient {
         ));
         gates.push(gate(
             "send_wizard_campaign_matches",
-            send_wizard.selected_campaign_id == Some(request.campaign_id),
+            send_wizard.selected_campaign_id == Some(request.campaign_id)
+                || send_wizard.requested_campaign_available,
             "blocker",
             format!(
-                "selected campaign id is {:?}",
-                send_wizard.selected_campaign_id
+                "selected campaign id is {:?}; requested campaign available is {}",
+                send_wizard.selected_campaign_id, send_wizard.requested_campaign_available
             ),
         ));
         gates.push(gate(
             "send_wizard_lists_match",
-            ids_match(&send_wizard.selected_list_ids, &request.list_ids),
+            ids_match(&send_wizard.selected_list_ids, &request.list_ids)
+                || send_wizard.requested_list_ids_proven_by_recipient_count,
             "blocker",
-            format!("selected list ids are {:?}", send_wizard.selected_list_ids),
+            format!(
+                "selected list ids are {:?}; recipient-count list proof is {}",
+                send_wizard.selected_list_ids,
+                send_wizard.requested_list_ids_proven_by_recipient_count
+            ),
         ));
         gates.push(gate(
             "send_wizard_queue_unchanged",
@@ -694,11 +734,26 @@ fn parse_send_wizard_final_page(
 ) -> Result<SendWizardReadbackReport, InterspireError> {
     let fields = parse_form_values_exact(html)?;
     let selected_campaign = selected_option(html, "newsletter")?;
-    let final_form_action = first_form_action(html, "frmSend")?;
+    let requested_campaign = option_by_value(html, "newsletter", campaign_id)?;
+    let requested_campaign_available = requested_campaign.is_some()
+        || selected_campaign
+            .as_ref()
+            .and_then(|option| option.value.parse::<u64>().ok())
+            == Some(campaign_id);
+    let campaign_label = selected_campaign
+        .as_ref()
+        .filter(|option| option.value.parse::<u64>().ok() == Some(campaign_id))
+        .or(requested_campaign.as_ref())
+        .map(|option| redact::redact_sensitive_text(&option.label));
+    let final_form_action = match first_form_action(html, "frmSend")? {
+        Some(action) => Some(action),
+        None => first_send_form_action(html)?,
+    };
     let final_form_posts_to_send_boundary = final_form_action
         .as_deref()
         .is_some_and(is_send_boundary_action);
     let selected_list_ids = selected_or_hidden_list_ids(html)?.unwrap_or_default();
+    let recipient_count = recipient_count_marker(html);
     let mut warnings = Vec::new();
     if !final_form_posts_to_send_boundary {
         warnings.push(
@@ -718,9 +773,10 @@ fn parse_send_wizard_final_page(
         selected_campaign_id: selected_campaign
             .as_ref()
             .and_then(|option| option.value.parse().ok()),
-        campaign_label: selected_campaign
-            .map(|option| redact::redact_sensitive_text(&option.label)),
-        recipient_count: recipient_count_marker(html),
+        requested_campaign_available,
+        requested_list_ids_proven_by_recipient_count: false,
+        campaign_label,
+        recipient_count,
         from_name: value_for(&fields, &["sendfromname", "fromname"])
             .map(|value| redact::redact_sensitive_text(&value)),
         from_email_redacted: value_for(&fields, &["sendfromemail", "fromemail"])
@@ -778,9 +834,38 @@ fn selected_option(html: &str, select_name: &str) -> Result<Option<SelectOption>
         }
         let selected = select
             .select(&option_selector)
-            .find(|option| option.value().attr("selected").is_some())
-            .or_else(|| select.select(&option_selector).next());
+            .find(|option| option.value().attr("selected").is_some());
         return Ok(selected.map(|option| SelectOption {
+            value: option.value().attr("value").unwrap_or_default().to_string(),
+            label: compact_text(&option.text().collect::<Vec<_>>().join(" ")),
+        }));
+    }
+    Ok(None)
+}
+
+fn option_by_value(
+    html: &str,
+    select_name: &str,
+    expected_value: u64,
+) -> Result<Option<SelectOption>, InterspireError> {
+    let document = Html::parse_document(html);
+    let select_selector =
+        Selector::parse("select").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
+    let option_selector =
+        Selector::parse("option").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
+    let expected = expected_value.to_string();
+    for select in document.select(&select_selector) {
+        if !select
+            .value()
+            .attr("name")
+            .is_some_and(|name| name.eq_ignore_ascii_case(select_name))
+        {
+            continue;
+        }
+        let matching = select
+            .select(&option_selector)
+            .find(|option| option.value().attr("value") == Some(expected.as_str()));
+        return Ok(matching.map(|option| SelectOption {
             value: option.value().attr("value").unwrap_or_default().to_string(),
             label: compact_text(&option.text().collect::<Vec<_>>().join(" ")),
         }));
@@ -913,6 +998,21 @@ fn first_form_action(html: &str, form_name: &str) -> Result<Option<String>, Inte
             .is_some_and(|name| name.eq_ignore_ascii_case(form_name))
         {
             return Ok(form.value().attr("action").map(ToString::to_string));
+        }
+    }
+    Ok(None)
+}
+
+fn first_send_form_action(html: &str) -> Result<Option<String>, InterspireError> {
+    let document = Html::parse_document(html);
+    let form_selector =
+        Selector::parse("form").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
+    for form in document.select(&form_selector) {
+        let Some(action) = form.value().attr("action") else {
+            continue;
+        };
+        if is_send_boundary_action(action) {
+            return Ok(Some(action.to_string()));
         }
     }
     Ok(None)
@@ -1143,6 +1243,39 @@ mod tests {
         assert!(!serialized.contains("editor@example.invalid"));
         assert!(!serialized.contains("bounces@example.invalid"));
         assert!(!serialized.contains("index.php?Page=Send&Action=Step3"));
+    }
+
+    #[test]
+    fn final_send_wizard_page_handles_interspire_8_unnamed_send_form() {
+        let html = r#"
+            <form action="index.php?Page=Send&Action=Step4">
+              <select name="newsletter">
+                <option value="0" selected>Please select an email campaign</option>
+                <option value="7">Launch campaign</option>
+              </select>
+              <input name="sendfromname" value="Example Update">
+              <input name="sendfromemail" value="sender@example.invalid">
+              <input name="replytoemail" value="editor@example.invalid">
+              <input name="bounceemail" value="bounces@example.invalid">
+              <input type="checkbox" name="sendimmediately" checked>
+              <input type="checkbox" name="trackopens" checked>
+              <input type="checkbox" name="tracklinks" checked>
+              <input type="checkbox" name="sendmultipart" checked>
+              <p>1 recipient selected</p>
+            </form>
+        "#;
+
+        let report = parse_send_wizard_final_page(7, &[3], html).expect("parse final page");
+
+        assert_eq!(report.selected_campaign_id, Some(0));
+        assert!(report.requested_campaign_available);
+        assert_eq!(report.campaign_label.as_deref(), Some("Launch campaign"));
+        assert!(report.selected_list_ids.is_empty());
+        assert_eq!(report.recipient_count, Some(1));
+        assert!(report.final_form_posts_to_send_boundary);
+        assert!(!report.send_performed);
+        assert!(!report.scheduled);
+        assert!(!report.production_send_authorized);
     }
 
     #[test]

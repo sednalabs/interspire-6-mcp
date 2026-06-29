@@ -726,6 +726,10 @@ impl AdminHtmlClient {
     }
 
     fn login(&self) -> Result<(), InterspireError> {
+        if self.get_allowed(&AdminReadPage::Lists.path()).is_ok() {
+            return Ok(());
+        }
+
         let base_url = self.config.base_url.as_deref().unwrap_or_default();
         let username = self.config.username.as_deref().unwrap_or_default();
         let password = self.config.password.as_deref().unwrap_or_default();
