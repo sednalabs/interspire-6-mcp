@@ -1,4 +1,4 @@
-//! URL safety policy for legacy Interspire admin HTML.
+//! URL safety policy for Interspire admin HTML.
 //!
 //! Only explicitly known GET pages are admitted. Send, schedule, cron, import,
 //! export, save, delete, unsubscribe, and parameter-smuggling variants are

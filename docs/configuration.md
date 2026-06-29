@@ -6,10 +6,15 @@ without containing secrets, cookies, saved HTML, or live recipient data.
 ## XML API
 
 ```bash
+INTERSPIRE_VERSION=auto
 INTERSPIRE_XML_ENDPOINT='https://example.invalid/xml.php'
 INTERSPIRE_XML_USERNAME='xml-user'
 INTERSPIRE_XML_TOKEN='redacted-token'
 ```
+
+`INTERSPIRE_VERSION` accepts `auto`, `6.2.3`, and `8.x`. The default is
+`auto`. Use `6.2.3` for older installations and `8.x` for newer admin login
+surfaces that emit JavaScript CSRF tokens.
 
 Supported secret file:
 
@@ -80,6 +85,33 @@ Current public behavior:
 Use write flags only for the process that should apply an already-reviewed
 plan. Preview remains available without them.
 
+## Sensitive Reads
+
+Sensitive reads are off unless the runtime enables them explicitly:
+
+```bash
+INTERSPIRE_SENSITIVE_READS=1
+```
+
+`interspire_sensitive_field_query` is read-only but can return unredacted saved
+admin form values. It is intended for setup/debugging cases where an operator
+needs one exact approved setup field, such as a saved SMTP host, list sender
+address, reply-to address, or bounce mailbox.
+
+Each call must provide:
+
+- a reviewed target, such as a settings section or list;
+- exact field names;
+- `acknowledge_sensitive_output=true`.
+
+The policy-core preflight denies calls when the runtime gate is disabled, the
+acknowledgement is missing, or the requested field list exceeds toolkit
+boundary limits. Interspire-specific allowlists then deny fields outside the
+target contract. Password, token, license, cookie, API-key, private-key,
+credential, and similar field names are never revealed by this tool family.
+User and campaign targets currently reveal no fields; exposing those values
+would require a deliberately documented tool-family expansion.
+
 ## Audience Hygiene Artifacts
 
 Private audience artifacts require an approved root:
@@ -91,7 +123,7 @@ INTERSPIRE_AUDIENCE_HYGIENE_ROOTS=/secure/private
 The CLI and MCP request may provide the output directory:
 
 ```bash
-interspire-6-mcp audience-hygiene-export \
+interspire-mcp audience-hygiene-export \
   --source-list-ids 7,8,9 \
   --output-dir /secure/private/interspire-audience-hygiene \
   --artifact-prefix example-run

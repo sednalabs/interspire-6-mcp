@@ -1,7 +1,7 @@
 # Contributing
 
 Contributions are welcome when they preserve the core safety contract: curated
-Interspire 6.2.3 operational tools, redacted output, and no broad admin escape
+Interspire operational tools, redacted output, and no broad admin escape
 hatches.
 
 ## Before You Open A Pull Request

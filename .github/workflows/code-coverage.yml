@@ -101,5 +101,5 @@ jobs:
         with:
           file: coverage/workspace.xml
           language: Rust
-          label: code-coverage/interspire-6-mcp
+          label: code-coverage/interspire-mcp
           fail-on-error: false

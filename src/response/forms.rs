@@ -1,5 +1,6 @@
 use super::{Evidence, RedactedField};
 use crate::config::WriteExecutionMode;
+use mcp_toolkit_policy_core::Decision;
 use serde::Serialize;
 
 #[derive(Debug, Clone, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -93,6 +94,24 @@ pub struct SettingsUpdateApplyRequest {
     pub updates: Vec<FormFieldUpdate>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, rmcp::schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SensitiveFieldTarget {
+    Settings { section: SettingsSectionName },
+    List { list_id: u64 },
+    User { user_id: u64 },
+    Campaign { campaign_id: u64 },
+}
+
+#[derive(Debug, Clone, serde::Deserialize, rmcp::schemars::JsonSchema)]
+pub struct SensitiveFieldQueryRequest {
+    pub target: SensitiveFieldTarget,
+    #[serde(default)]
+    pub fields: Vec<String>,
+    #[serde(default)]
+    pub acknowledge_sensitive_output: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FormFieldDescriptor {
     pub name: String,
@@ -141,6 +160,43 @@ pub struct GuardedWriteApplyReport {
     pub changes: Vec<FormFieldChange>,
     pub post_apply_fields: Vec<RedactedField>,
     pub warnings: Vec<String>,
+    pub evidence: Evidence,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SensitiveFieldValue {
+    pub name: String,
+    pub value: String,
+    pub sensitive_output: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SensitiveFieldDenial {
+    pub name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SensitiveToolMetadata {
+    pub tool_family: String,
+    pub sensitivity: String,
+    pub approval_required: bool,
+    pub apps_sdk_metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SensitiveFieldQueryReport {
+    pub ok: bool,
+    pub configured: bool,
+    pub sensitive_reads_enabled: bool,
+    pub policy_decision: Decision,
+    pub target: String,
+    pub target_id: Option<u64>,
+    pub section: Option<String>,
+    pub values: Vec<SensitiveFieldValue>,
+    pub denied_fields: Vec<SensitiveFieldDenial>,
+    pub warnings: Vec<String>,
+    pub metadata: SensitiveToolMetadata,
     pub evidence: Evidence,
 }
 
@@ -202,6 +258,32 @@ impl GuardedWriteApplyReport {
                 value: Some("After".to_string()),
             }],
             warnings: vec!["fixture response; no live Interspire write occurred".to_string()],
+            evidence: Evidence {
+                source: "fixture".to_string(),
+                notes: vec!["synthetic fixture".to_string()],
+            },
+        }
+    }
+}
+
+impl SensitiveFieldQueryReport {
+    pub fn fixture() -> Self {
+        Self {
+            ok: true,
+            configured: true,
+            sensitive_reads_enabled: true,
+            policy_decision: Decision::allow(),
+            target: "settings".to_string(),
+            target_id: None,
+            section: Some("email".to_string()),
+            values: vec![SensitiveFieldValue {
+                name: "smtp_server".to_string(),
+                value: "smtp.example.invalid".to_string(),
+                sensitive_output: true,
+            }],
+            denied_fields: Vec::new(),
+            warnings: vec!["fixture response; values are synthetic".to_string()],
+            metadata: super::sensitive_field_query_metadata(),
             evidence: Evidence {
                 source: "fixture".to_string(),
                 notes: vec!["synthetic fixture".to_string()],

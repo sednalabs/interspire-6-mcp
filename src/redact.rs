@@ -1,3 +1,4 @@
+use mcp_toolkit_observability::redaction::redact_telemetry_text;
 use sha2::{Digest, Sha256};
 
 pub fn redact_email(value: &str) -> String {
@@ -19,7 +20,7 @@ pub fn email_hash(value: &str) -> String {
 }
 
 pub fn redact_sensitive_text(value: &str) -> String {
-    let mut output = value.to_string();
+    let mut output = redact_telemetry_text(value);
     for marker in [
         "password",
         "passwd",

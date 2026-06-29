@@ -1,7 +1,7 @@
-# AGENTS.md - interspire-6-mcp
+# AGENTS.md - interspire-mcp
 
 This repository contains a public Rust MCP server for Interspire Email Marketer
-6.2.3. It follows the curated stdio intent-server pattern from
+6.x and 8.x operational surfaces. It follows the curated stdio intent-server pattern from
 `sednalabs/mcp-toolkit-rs`.
 
 ## Engineering Rules
@@ -19,6 +19,9 @@ This repository contains a public Rust MCP server for Interspire Email Marketer
   cancel/delete plus guarded no-send campaign, list, user, and non-secret
   settings edits, including non-secret delivery and cron configuration that is
   stored inside Interspire forms.
+- Sensitive reads are exceptional read-only tools, not ordinary readback.
+  Preserve the toolkit sensitive-read posture, runtime gate, per-call
+  acknowledgement, exact field list, and Interspire-owned allowlists.
 - Do not add send, schedule, cron-trigger, import, raw contact export,
   unsubscribe/resubscribe, suppression mutation, SMTP password, bounce
   password, provider APIs, DNS, or generic admin URL tools.

@@ -1,6 +1,6 @@
 //! Authenticated Interspire admin HTML readback adapter.
 //!
-//! This module owns the brittle legacy HTML boundary for allowlisted GET-only
+//! This module owns the brittle admin HTML boundary for allowlisted GET-only
 //! pages. It logs in with credentials supplied outside git, reads only pages
 //! admitted by `safety`, parses redacted operational fields, and never exposes
 //! raw saved HTML, cookies, passwords, contact exports, or send/cron actions.
@@ -8,17 +8,20 @@
 mod forms;
 
 use crate::{
-    config::{AdminHtmlConfig, WriteExecutionMode},
+    config::{AdminHtmlConfig, InterspireVersion, WriteExecutionMode},
     error::InterspireError,
     guarded_write, redact,
     response::{
         CampaignReadbackReport, Evidence, FormFieldUpdate, GuardedWriteApplyReport,
         GuardedWritePreviewReport, ListSummary, QueueControlAction, QueueControlCandidate,
-        QueueStatsReadbackReport, RedactedField, SettingsAuditReport, SettingsSection,
-        SettingsSectionName, UserSmtpReadbackReport, UserSmtpSummary,
+        QueueStatsReadbackReport, RedactedField, SensitiveFieldDenial, SensitiveFieldQueryReport,
+        SensitiveFieldQueryRequest, SensitiveFieldTarget, SensitiveFieldValue, SettingsAuditReport,
+        SettingsSection, SettingsSectionName, UserSmtpReadbackReport, UserSmtpSummary,
     },
     safety::{self, AdminReadPage, QueueControlRoute},
 };
+use mcp_toolkit_observability::redaction::truncate;
+use mcp_toolkit_policy_core::{sensitive_read_policy_decision, Decision, DecisionCode};
 use reqwest::{blocking::Client, redirect::Policy};
 use scraper::{ElementRef, Html, Selector};
 use sha2::{Digest, Sha256};
@@ -74,6 +77,31 @@ struct QueueDeleteForm {
     submit_name: String,
     submit_value: String,
     hidden_pairs: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoginCsrfToken {
+    field_name: String,
+    value: String,
+}
+
+#[derive(Debug, Clone)]
+struct SensitiveFieldQueryContext {
+    target: String,
+    target_id: Option<u64>,
+    section: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SensitiveFieldQueryReportInput {
+    configured: bool,
+    sensitive_reads_enabled: bool,
+    policy_decision: Decision,
+    context: SensitiveFieldQueryContext,
+    denied_fields: Vec<SensitiveFieldDenial>,
+    values: Vec<SensitiveFieldValue>,
+    warnings: Vec<String>,
+    evidence: Evidence,
 }
 
 impl AdminHtmlClient {
@@ -163,6 +191,159 @@ impl AdminHtmlClient {
             warnings: Vec::new(),
             evidence: admin_evidence(vec!["allowlisted Settings tab GET reads".to_string()]),
         })
+    }
+
+    pub fn sensitive_field_query(
+        &self,
+        request: &SensitiveFieldQueryRequest,
+        sensitive_reads_enabled: bool,
+    ) -> Result<SensitiveFieldQueryReport, InterspireError> {
+        let (context, read_page) = sensitive_target_context(&request.target);
+        let mut warnings = Vec::new();
+        let mut denied_fields = Vec::new();
+        let requested_fields = normalize_requested_fields(&request.fields);
+
+        if !self.config.is_configured() {
+            return Ok(build_sensitive_field_query_report(
+                SensitiveFieldQueryReportInput {
+                    configured: false,
+                    sensitive_reads_enabled,
+                    policy_decision: Decision::deny(
+                        DecisionCode::CapabilityMissing,
+                        Some("admin_html_not_configured"),
+                    ),
+                    context,
+                    denied_fields: deny_requested_fields(
+                        &request.fields,
+                        "admin HTML fallback is not configured",
+                    ),
+                    values: Vec::new(),
+                    warnings: vec![
+                        "admin HTML fallback is not configured; no sensitive read attempted"
+                            .to_string(),
+                    ],
+                    evidence: admin_evidence(vec!["no request sent".to_string()]),
+                },
+            ));
+        }
+
+        let policy_decision = sensitive_read_policy_decision(
+            sensitive_reads_enabled,
+            request.acknowledge_sensitive_output,
+            &requested_fields,
+        );
+        if !policy_decision.allow {
+            return Ok(build_sensitive_field_query_report(
+                SensitiveFieldQueryReportInput {
+                    configured: true,
+                    sensitive_reads_enabled,
+                    policy_decision,
+                    context,
+                    denied_fields: deny_requested_fields(
+                        &request.fields,
+                        "sensitive-read policy denied this request",
+                    ),
+                    values: Vec::new(),
+                    warnings: vec![
+                        "sensitive field query refused by policy core; no admin read attempted"
+                            .to_string(),
+                    ],
+                    evidence: admin_evidence(vec!["no request sent".to_string()]),
+                },
+            ));
+        }
+
+        if request.fields.len() > requested_fields.len() {
+            warnings.push("duplicate or blank requested fields were collapsed".to_string());
+        }
+        let requested_fields = requested_fields.into_iter().take(20).collect::<Vec<_>>();
+        if requested_fields.len() == 20 && request.fields.len() > 20 {
+            warnings.push("sensitive field query capped to first 20 unique fields".to_string());
+        }
+
+        let allowed_fields = sensitive_allowed_fields(&request.target);
+        let mut approved_fields = Vec::new();
+        for field in requested_fields {
+            if is_forbidden_sensitive_field(&field) {
+                denied_fields.push(SensitiveFieldDenial {
+                    name: field,
+                    reason: "password/token/license/key/cookie/API-secret shaped fields cannot be revealed by this tool family".to_string(),
+                });
+                continue;
+            }
+            if !allowed_fields.contains(&field.as_str()) {
+                denied_fields.push(SensitiveFieldDenial {
+                    name: field,
+                    reason:
+                        "field is outside the approved sensitive setup allowlist for this target"
+                            .to_string(),
+                });
+                continue;
+            }
+            approved_fields.push(field);
+        }
+
+        if approved_fields.is_empty() {
+            warnings.push(
+                "no approved sensitive setup fields were requested; no admin read attempted"
+                    .to_string(),
+            );
+            return Ok(build_sensitive_field_query_report(
+                SensitiveFieldQueryReportInput {
+                    configured: true,
+                    sensitive_reads_enabled: true,
+                    policy_decision,
+                    context,
+                    denied_fields,
+                    values: Vec::new(),
+                    warnings,
+                    evidence: admin_evidence(vec!["no request sent".to_string()]),
+                },
+            ));
+        }
+
+        self.login()?;
+        let html = self.get_allowed(&read_page.path())?;
+        let values = parse_form_values(&html)?;
+
+        let mut revealed = Vec::new();
+        for field in approved_fields {
+            let Some(value) = values.get(&field).filter(|value| !value.trim().is_empty()) else {
+                denied_fields.push(SensitiveFieldDenial {
+                    name: field,
+                    reason: "field was not present or was blank on the approved admin form"
+                        .to_string(),
+                });
+                continue;
+            };
+            revealed.push(SensitiveFieldValue {
+                name: field,
+                value: value.clone(),
+                sensitive_output: true,
+            });
+        }
+
+        if !revealed.is_empty() {
+            warnings.push(
+                "response contains approved unredacted Interspire admin form values".to_string(),
+            );
+        }
+
+        Ok(build_sensitive_field_query_report(
+            SensitiveFieldQueryReportInput {
+                configured: true,
+                sensitive_reads_enabled: true,
+                policy_decision,
+                context,
+                denied_fields,
+                values: revealed,
+                warnings,
+                evidence: admin_evidence(vec![
+                    "allowlisted admin form GET read".to_string(),
+                    "exact requested fields only".to_string(),
+                ]),
+            },
+        ))
     }
 
     pub fn user_smtp_readback(
@@ -329,7 +510,7 @@ impl AdminHtmlClient {
                     action.as_str()
                 ),
                 format!(
-                    "legacy admin returned HTTP {}; Schedule page re-read after apply",
+                    "admin returned HTTP {}; Schedule page re-read after apply",
                     status.as_u16()
                 ),
             ],
@@ -484,16 +665,22 @@ impl AdminHtmlClient {
         let username = self.config.username.as_deref().unwrap_or_default();
         let password = self.config.password.as_deref().unwrap_or_default();
         let login_url = safety::login_url(base_url)?;
+        let csrf_token = self.login_csrf_token(&login_url)?;
+        let mut form = vec![
+            ("ss_username", username.to_string()),
+            ("ss_password", password.to_string()),
+            ("ss_takemeto", String::new()),
+            ("SubmitButton", "Login".to_string()),
+        ];
+        if let Some(token) = csrf_token.as_ref() {
+            form.push((token.field_name.as_str(), token.value.clone()));
+        }
 
-        let response = self
-            .http
-            .post(login_url)
-            .form(&[
-                ("ss_username", username),
-                ("ss_password", password),
-                ("ss_takemeto", ""),
-                ("SubmitButton", "Login"),
-            ])
+        let mut request = self.http.post(login_url).form(&form);
+        if let Some(token) = csrf_token.as_ref() {
+            request = request.header("x-csrf-token", token.value.as_str());
+        }
+        let response = request
             .send()
             .map_err(|err| InterspireError::Http(err.to_string()))?;
         if !response.status().is_success() && !response.status().is_redirection() {
@@ -503,6 +690,37 @@ impl AdminHtmlClient {
             )));
         }
         self.get_allowed(&AdminReadPage::Lists.path()).map(|_| ())
+    }
+
+    fn login_csrf_token(&self, login_url: &Url) -> Result<Option<LoginCsrfToken>, InterspireError> {
+        let response = match self.http.get(login_url.clone()).send() {
+            Ok(response) => response,
+            Err(err) if self.config.version == InterspireVersion::V8 => {
+                return Err(InterspireError::Http(err.to_string()));
+            }
+            Err(_) => return Ok(None),
+        };
+
+        if !response.status().is_success() {
+            if self.config.version == InterspireVersion::V8 {
+                return Err(InterspireError::Http(format!(
+                    "admin login token read returned HTTP {}",
+                    response.status().as_u16()
+                )));
+            }
+            return Ok(None);
+        }
+
+        let html = response
+            .text()
+            .map_err(|err| InterspireError::Http(err.to_string()))?;
+        let token = extract_login_csrf_token(&html);
+        if token.is_none() && self.config.version == InterspireVersion::V8 {
+            return Err(InterspireError::Http(
+                "Interspire 8 admin login did not expose a CSRF token".to_string(),
+            ));
+        }
+        Ok(token)
     }
 
     fn get_allowed(&self, path: &str) -> Result<String, InterspireError> {
@@ -604,11 +822,242 @@ fn ensure_authenticated_html(html: &str) -> Result<(), InterspireError> {
     Ok(())
 }
 
+fn extract_login_csrf_token(html: &str) -> Option<LoginCsrfToken> {
+    let document = Html::parse_document(html);
+    let input_selector = Selector::parse("input").ok()?;
+    for input in document.select(&input_selector) {
+        let name = input.value().attr("name").unwrap_or_default();
+        if is_login_csrf_field(name) {
+            if let Some(value) =
+                normalize_csrf_token(input.value().attr("value").unwrap_or_default())
+            {
+                return Some(LoginCsrfToken {
+                    field_name: name.to_string(),
+                    value,
+                });
+            }
+        }
+    }
+
+    [
+        "IEM_CSRF_TOKEN",
+        "csrfToken",
+        "csrf_token",
+        "iem_csrf_token",
+    ]
+    .iter()
+    .find_map(|name| {
+        extract_js_string_assignment(html, name).map(|value| LoginCsrfToken {
+            field_name: "csrfToken".to_string(),
+            value,
+        })
+    })
+}
+
+fn is_login_csrf_field(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "token" | "csrf" | "csrf_token" | "csrftoken" | "_token" | "form_token" | "iem_csrf_token"
+    ) || lower.ends_with("token")
+}
+
+fn extract_js_string_assignment(html: &str, name: &str) -> Option<String> {
+    let mut remainder = html;
+    while let Some(name_offset) = remainder.find(name) {
+        let after_name = &remainder[name_offset + name.len()..];
+        let eq_offset = after_name.find('=')?;
+        let after_eq = after_name[eq_offset + 1..].trim_start();
+        let Some(quote) = after_eq
+            .chars()
+            .next()
+            .filter(|quote| *quote == '\'' || *quote == '"')
+        else {
+            remainder = &after_name[eq_offset + 1..];
+            continue;
+        };
+        let token_body = &after_eq[quote.len_utf8()..];
+        let end_offset = token_body.find(quote)?;
+        if let Some(token) = normalize_csrf_token(&token_body[..end_offset]) {
+            return Some(token);
+        }
+        remainder = &token_body[end_offset + quote.len_utf8()..];
+    }
+    None
+}
+
+fn normalize_csrf_token(value: &str) -> Option<String> {
+    let token = value.trim();
+    if token.is_empty()
+        || token.len() > 512
+        || token
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '<' | '>' | '&'))
+    {
+        return None;
+    }
+    Some(token.to_string())
+}
+
 fn admin_evidence(notes: Vec<String>) -> Evidence {
     Evidence {
         source: "interspire_admin_html".to_string(),
         notes,
     }
+}
+
+fn build_sensitive_field_query_report(
+    input: SensitiveFieldQueryReportInput,
+) -> SensitiveFieldQueryReport {
+    SensitiveFieldQueryReport {
+        ok: true,
+        configured: input.configured,
+        sensitive_reads_enabled: input.sensitive_reads_enabled,
+        policy_decision: input.policy_decision,
+        target: input.context.target,
+        target_id: input.context.target_id,
+        section: input.context.section,
+        values: input.values,
+        denied_fields: input.denied_fields,
+        warnings: input.warnings,
+        metadata: crate::response::sensitive_field_query_metadata(),
+        evidence: input.evidence,
+    }
+}
+
+fn sensitive_target_context(
+    target: &SensitiveFieldTarget,
+) -> (SensitiveFieldQueryContext, AdminReadPage) {
+    match target {
+        SensitiveFieldTarget::Settings { section } => (
+            SensitiveFieldQueryContext {
+                target: "settings".to_string(),
+                target_id: None,
+                section: Some(section.as_str().to_string()),
+            },
+            AdminReadPage::Settings {
+                tab: settings_sensitive_tab(*section),
+            },
+        ),
+        SensitiveFieldTarget::List { list_id } => (
+            SensitiveFieldQueryContext {
+                target: "list".to_string(),
+                target_id: Some(*list_id),
+                section: None,
+            },
+            AdminReadPage::ListEdit { id: *list_id },
+        ),
+        SensitiveFieldTarget::User { user_id } => (
+            SensitiveFieldQueryContext {
+                target: "user".to_string(),
+                target_id: Some(*user_id),
+                section: None,
+            },
+            AdminReadPage::UserEdit { id: *user_id },
+        ),
+        SensitiveFieldTarget::Campaign { campaign_id } => (
+            SensitiveFieldQueryContext {
+                target: "campaign".to_string(),
+                target_id: Some(*campaign_id),
+                section: None,
+            },
+            AdminReadPage::NewsletterEdit { id: *campaign_id },
+        ),
+    }
+}
+
+fn settings_sensitive_tab(section: SettingsSectionName) -> u8 {
+    match section {
+        SettingsSectionName::Application => 1,
+        SettingsSectionName::Email => 2,
+        SettingsSectionName::Cron => 4,
+        SettingsSectionName::Bounce => 7,
+    }
+}
+
+fn normalize_requested_fields(fields: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for field in fields {
+        let field = field.trim().to_ascii_lowercase();
+        if field.is_empty() || normalized.contains(&field) {
+            continue;
+        }
+        normalized.push(field);
+    }
+    normalized
+}
+
+fn deny_requested_fields(fields: &[String], reason: &str) -> Vec<SensitiveFieldDenial> {
+    normalize_requested_fields(fields)
+        .into_iter()
+        .take(20)
+        .map(|field| SensitiveFieldDenial {
+            name: truncate(&field, 128),
+            reason: redact::redact_sensitive_text(reason),
+        })
+        .collect()
+}
+
+fn sensitive_allowed_fields(target: &SensitiveFieldTarget) -> &'static [&'static str] {
+    match target {
+        SensitiveFieldTarget::Settings { section } => match section {
+            SettingsSectionName::Application => &[
+                "application_url",
+                "contact_email",
+                "email_address",
+                "server_time_zone",
+            ],
+            SettingsSectionName::Email => &[
+                "usesmtp",
+                "smtp_server",
+                "smtp_u",
+                "smtp_port",
+                "maxhourlyrate",
+                "resend_maximum",
+                "force_unsublink",
+            ],
+            SettingsSectionName::Bounce => &[
+                "bounce_process",
+                "bounce_address",
+                "bounce_server",
+                "bounce_username",
+                "bounce_imap",
+                "bounce_extrasettings",
+                "bounce_agreedeleteall",
+            ],
+            SettingsSectionName::Cron => &[
+                "cron_send",
+                "cron_bounce",
+                "cron_autoresponder",
+                "cron_triggeremails_s",
+                "cron_maintenance",
+            ],
+        },
+        SensitiveFieldTarget::List { .. } => &["owneremail", "replytoemail", "bounceemail"],
+        SensitiveFieldTarget::User { .. } => &[],
+        SensitiveFieldTarget::Campaign { .. } => &[],
+    }
+}
+
+fn is_forbidden_sensitive_field(field: &str) -> bool {
+    let lower = field.to_ascii_lowercase();
+    [
+        "password",
+        "passwd",
+        "pass",
+        "token",
+        "secret",
+        "license",
+        "licence",
+        "cookie",
+        "api_key",
+        "apikey",
+        "private_key",
+        "credential",
+        "access_key",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 pub fn parse_list_edit_metadata(
@@ -1173,6 +1622,11 @@ fn compact_text(value: &str) -> String {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::{Duration, Instant};
     use url::Url;
 
     #[test]
@@ -1232,6 +1686,184 @@ mod tests {
             <table><tr><td>Campaign summary</td></tr></table>
         "#;
         ensure_authenticated_html(html).unwrap_or_else(|err| panic!("{err}"));
+    }
+
+    #[test]
+    fn login_csrf_token_prefers_hidden_field() {
+        let html = r#"
+            <form method="post" action="index.php?Page=Login&Action=Login">
+              <input name="csrf_token" value="hidden-token-123">
+              <script>var IEM_CSRF_TOKEN = "script-token-456";</script>
+            </form>
+        "#;
+
+        assert_eq!(
+            extract_login_csrf_token(html),
+            Some(LoginCsrfToken {
+                field_name: "csrf_token".to_string(),
+                value: "hidden-token-123".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn login_csrf_token_extracts_interspire_8_script_value() {
+        let html = r#"
+            <script>
+              window.IEM_CSRF_TOKEN = 'iem8-token-789';
+            </script>
+        "#;
+
+        assert_eq!(
+            extract_login_csrf_token(html),
+            Some(LoginCsrfToken {
+                field_name: "csrfToken".to_string(),
+                value: "iem8-token-789".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn login_csrf_token_accepts_generic_token_hidden_field() {
+        let html = r#"
+            <form method="post" action="index.php?Page=Login&Action=Login">
+              <input name="_token" value="generic-token-123">
+            </form>
+        "#;
+
+        assert_eq!(
+            extract_login_csrf_token(html),
+            Some(LoginCsrfToken {
+                field_name: "_token".to_string(),
+                value: "generic-token-123".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn sensitive_field_policy_normalizes_exact_fields() {
+        let fields = normalize_requested_fields(&[
+            " SMTP_Server ".to_string(),
+            "smtp_server".to_string(),
+            String::new(),
+            "ReplyToEmail".to_string(),
+        ]);
+
+        assert_eq!(fields, vec!["smtp_server", "replytoemail"]);
+    }
+
+    #[test]
+    fn sensitive_field_allowlist_accepts_setup_fields_only() {
+        let email_target = SensitiveFieldTarget::Settings {
+            section: SettingsSectionName::Email,
+        };
+        let allowed = sensitive_allowed_fields(&email_target);
+
+        assert!(allowed.contains(&"smtp_server"));
+        assert!(allowed.contains(&"smtp_u"));
+        assert!(!allowed.contains(&"smtp_password"));
+        assert!(is_forbidden_sensitive_field("smtp_password"));
+        assert!(is_forbidden_sensitive_field("license_key"));
+        assert!(!is_forbidden_sensitive_field("tracklinks"));
+    }
+
+    #[test]
+    fn denied_sensitive_field_reasons_are_redacted_and_bounded() {
+        let denials = deny_requested_fields(
+            &["Access_Token".to_string()],
+            "token=super-secret-value for https://example.invalid/path",
+        );
+
+        assert_eq!(denials[0].name, "access_token");
+        assert!(!denials[0].reason.contains("super-secret-value"));
+        assert!(!denials[0].reason.contains("example.invalid"));
+    }
+
+    #[test]
+    fn sensitive_field_query_disabled_gate_attempts_no_admin_read() {
+        let client = AdminHtmlClient::new(test_admin_config("http://127.0.0.1:1/admin/"))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let report = client
+            .sensitive_field_query(
+                &sensitive_email_settings_request(&["smtp_server"], true),
+                false,
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!report.policy_decision.allow);
+        assert!(report.values.is_empty());
+        assert!(report
+            .evidence
+            .notes
+            .iter()
+            .any(|note| note == "no request sent"));
+    }
+
+    #[test]
+    fn sensitive_field_query_missing_acknowledgement_attempts_no_admin_read() {
+        let client = AdminHtmlClient::new(test_admin_config("http://127.0.0.1:1/admin/"))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let report = client
+            .sensitive_field_query(
+                &sensitive_email_settings_request(&["smtp_server"], false),
+                true,
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!report.policy_decision.allow);
+        assert!(report.values.is_empty());
+        assert!(report
+            .evidence
+            .notes
+            .iter()
+            .any(|note| note == "no request sent"));
+    }
+
+    #[test]
+    fn sensitive_field_query_forbidden_field_attempts_no_admin_read() {
+        let client = AdminHtmlClient::new(test_admin_config("http://127.0.0.1:1/admin/"))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let report = client
+            .sensitive_field_query(
+                &sensitive_email_settings_request(&["smtp_password"], true),
+                true,
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(report.policy_decision.allow);
+        assert!(report.values.is_empty());
+        assert_eq!(report.denied_fields.len(), 1);
+        assert_eq!(report.denied_fields[0].name, "smtp_password");
+        assert!(report
+            .evidence
+            .notes
+            .iter()
+            .any(|note| note == "no request sent"));
+    }
+
+    #[test]
+    fn sensitive_field_query_reveals_one_allowed_setup_value() {
+        let server = spawn_sensitive_read_fixture_server();
+        let client = AdminHtmlClient::new(test_admin_config(&server.base_url))
+            .unwrap_or_else(|err| panic!("{err}"));
+        let report = client
+            .sensitive_field_query(
+                &sensitive_email_settings_request(&["smtp_server"], true),
+                true,
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(report.policy_decision.allow);
+        assert!(report.denied_fields.is_empty());
+        assert_eq!(report.values.len(), 1);
+        assert_eq!(report.values[0].name, "smtp_server");
+        assert_eq!(report.values[0].value, "smtp.example.test");
+        assert!(report.values[0].sensitive_output);
+        assert_eq!(report.metadata.sensitivity, "unredacted_admin_form_values");
+        assert!(server
+            .requests()
+            .iter()
+            .any(|request| request.contains("GET /admin/index.php?Page=Settings&Tab=2 ")));
     }
 
     #[test]
@@ -1332,6 +1964,141 @@ mod tests {
             .unwrap_or_else(|| panic!("login form should be rejected"));
         assert_eq!(err.code(), "http_error");
         assert!(err.to_string().contains("login page"));
+    }
+
+    struct TestAdminServer {
+        base_url: String,
+        requests: Arc<Mutex<Vec<String>>>,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl TestAdminServer {
+        fn requests(&self) -> Vec<String> {
+            self.requests
+                .lock()
+                .unwrap_or_else(|err| panic!("test requests lock poisoned: {err}"))
+                .clone()
+        }
+    }
+
+    impl Drop for TestAdminServer {
+        fn drop(&mut self) {
+            if let Some(handle) = self.handle.take() {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| panic!("test admin server thread panicked"));
+            }
+        }
+    }
+
+    fn test_admin_config(base_url: &str) -> AdminHtmlConfig {
+        AdminHtmlConfig {
+            version: InterspireVersion::Auto,
+            base_url: Some(base_url.to_string()),
+            username: Some("operator".to_string()),
+            password: Some("password".to_string()),
+            enrich_limit: 25,
+        }
+    }
+
+    fn sensitive_email_settings_request(
+        fields: &[&str],
+        acknowledge_sensitive_output: bool,
+    ) -> SensitiveFieldQueryRequest {
+        SensitiveFieldQueryRequest {
+            target: SensitiveFieldTarget::Settings {
+                section: SettingsSectionName::Email,
+            },
+            fields: fields.iter().map(|field| (*field).to_string()).collect(),
+            acknowledge_sensitive_output,
+        }
+    }
+
+    fn spawn_sensitive_read_fixture_server() -> TestAdminServer {
+        let listener =
+            TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| panic!("bind failed: {err}"));
+        listener
+            .set_nonblocking(true)
+            .unwrap_or_else(|err| panic!("set_nonblocking failed: {err}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|err| panic!("local_addr failed: {err}"));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let thread_requests = Arc::clone(&requests);
+
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_millis(250)))
+                            .unwrap_or_else(|err| panic!("set_read_timeout failed: {err}"));
+                        let mut buffer = [0_u8; 8192];
+                        let bytes = stream
+                            .read(&mut buffer)
+                            .unwrap_or_else(|err| panic!("test request read failed: {err}"));
+                        let request = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+                        thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while push: {err}")
+                            })
+                            .push(request.clone());
+                        write_fixture_response(&mut stream, &request);
+                        if thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while count: {err}")
+                            })
+                            .len()
+                            >= 4
+                        {
+                            break;
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("test server accept failed: {err}"),
+                }
+            }
+        });
+
+        TestAdminServer {
+            base_url: format!("http://{address}/admin/"),
+            requests,
+            handle: Some(handle),
+        }
+    }
+
+    fn write_fixture_response(stream: &mut std::net::TcpStream, request: &str) {
+        let body = if request.starts_with("GET /admin/index.php?Page=Login&Action=Login ") {
+            r#"<form method="post" action="index.php?Page=Login&Action=Login">
+                <input type="hidden" name="csrf_token" value="fixture-csrf">
+                <input name="ss_username">
+                <input name="ss_password">
+              </form>"#
+        } else if request.starts_with("POST /admin/index.php?Page=Login&Action=Login ") {
+            "<html><body>logged in</body></html>"
+        } else if request.starts_with("GET /admin/index.php?Page=Lists ") {
+            "<html><body><a href=\"index.php?Page=Lists&Action=Edit&id=1\">List</a></body></html>"
+        } else if request.starts_with("GET /admin/index.php?Page=Settings&Tab=2 ") {
+            r#"<form>
+                <input name="smtp_server" value="smtp.example.test">
+                <input name="smtp_u" value="smtp-user">
+              </form>"#
+        } else {
+            "<html><body>unexpected request</body></html>"
+        };
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .unwrap_or_else(|err| panic!("test response write failed: {err}"));
     }
 
     #[test]

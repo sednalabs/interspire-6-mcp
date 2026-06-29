@@ -8,14 +8,18 @@ use std::{env, fs, path::Path};
 
 #[derive(Debug, Clone, Default)]
 pub struct InterspireServerConfig {
+    pub version: InterspireVersion,
     pub xml: XmlApiConfig,
     pub admin_html: AdminHtmlConfig,
     pub guarded_writes: GuardedWriteConfig,
+    pub sensitive_reads: SensitiveReadConfig,
 }
 
 impl InterspireServerConfig {
     pub fn from_env() -> Self {
+        let version = InterspireVersion::from_env();
         let mut admin_html = AdminHtmlConfig {
+            version,
             base_url: env_non_blank("INTERSPIRE_ADMIN_BASE_URL"),
             username: env_non_blank("INTERSPIRE_ADMIN_USERNAME"),
             password: env_non_blank("INTERSPIRE_ADMIN_PASSWORD"),
@@ -40,11 +44,44 @@ impl InterspireServerConfig {
         }
 
         let guarded_writes = GuardedWriteConfig::from_env();
+        let sensitive_reads = SensitiveReadConfig::from_env();
 
         Self {
+            version,
             xml,
             admin_html,
             guarded_writes,
+            sensitive_reads,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterspireVersion {
+    #[default]
+    Auto,
+    V6_2_3,
+    V8,
+}
+
+impl InterspireVersion {
+    fn from_env() -> Self {
+        env::var("INTERSPIRE_VERSION")
+            .ok()
+            .and_then(|raw| Self::parse(&raw))
+            .unwrap_or(Self::Auto)
+    }
+
+    fn parse(raw: &str) -> Option<Self> {
+        let normalized = raw.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "" | "auto" | "detect" => Some(Self::Auto),
+            "6" | "6.x" | "6.2" | "6.2.3" | "iem6" | "interspire6" => Some(Self::V6_2_3),
+            "8" | "8.x" | "8.0" | "iem8" | "interspire8" => Some(Self::V8),
+            value if value.starts_with("8.") => Some(Self::V8),
+            value if value.starts_with("6.") => Some(Self::V6_2_3),
+            _ => None,
         }
     }
 }
@@ -58,6 +95,19 @@ pub struct GuardedWriteConfig {
     pub send_controls_enabled: bool,
     pub production_send_controls_enabled: bool,
     pub execution_mode: WriteExecutionMode,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SensitiveReadConfig {
+    pub enabled: bool,
+}
+
+impl SensitiveReadConfig {
+    fn from_env() -> Self {
+        Self {
+            enabled: env_truthy("INTERSPIRE_SENSITIVE_READS"),
+        }
+    }
 }
 
 impl GuardedWriteConfig {
@@ -131,6 +181,7 @@ impl XmlApiConfig {
 
 #[derive(Debug, Clone)]
 pub struct AdminHtmlConfig {
+    pub version: InterspireVersion,
     pub base_url: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
@@ -140,6 +191,7 @@ pub struct AdminHtmlConfig {
 impl Default for AdminHtmlConfig {
     fn default() -> Self {
         Self {
+            version: InterspireVersion::Auto,
             base_url: None,
             username: None,
             password: None,
@@ -216,7 +268,7 @@ fn env_truthy(key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{AdminHtmlConfig, GuardedWriteConfig, XmlApiConfig};
+    use super::{AdminHtmlConfig, GuardedWriteConfig, InterspireVersion, XmlApiConfig};
     use std::{
         fs,
         path::PathBuf,
@@ -247,6 +299,23 @@ mod tests {
             config.execution_mode,
             super::WriteExecutionMode::PreviewApply
         );
+    }
+
+    #[test]
+    fn parses_interspire_version_aliases() {
+        assert_eq!(
+            InterspireVersion::parse("auto"),
+            Some(InterspireVersion::Auto)
+        );
+        assert_eq!(
+            InterspireVersion::parse("6.2.3"),
+            Some(InterspireVersion::V6_2_3)
+        );
+        assert_eq!(
+            InterspireVersion::parse("8.7.4"),
+            Some(InterspireVersion::V8)
+        );
+        assert_eq!(InterspireVersion::parse("unknown"), None);
     }
 
     #[test]
@@ -315,6 +384,7 @@ mod tests {
             base_url: Some("  ".to_string()),
             username: Some("\n\t".to_string()),
             password: Some("env-password".to_string()),
+            version: InterspireVersion::Auto,
             enrich_limit: 25,
         };
         config.apply_secret_file(&path);

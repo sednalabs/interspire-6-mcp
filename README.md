@@ -1,13 +1,15 @@
-# interspire-6-mcp
+# interspire-mcp
 
-[![Rust baseline](https://github.com/sednalabs/interspire-6-mcp/actions/workflows/rust.yml/badge.svg)](https://github.com/sednalabs/interspire-6-mcp/actions/workflows/rust.yml)
-[![CodeQL](https://github.com/sednalabs/interspire-6-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/sednalabs/interspire-6-mcp/actions/workflows/codeql.yml)
+[![Rust baseline](https://github.com/sednalabs/interspire-mcp/actions/workflows/rust.yml/badge.svg)](https://github.com/sednalabs/interspire-mcp/actions/workflows/rust.yml)
+[![CodeQL](https://github.com/sednalabs/interspire-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/sednalabs/interspire-mcp/actions/workflows/codeql.yml)
 
-`interspire-6-mcp` is a safety-first Rust MCP server and reference
-implementation for wrapping legacy newsletter operations in a narrow,
-auditable, least-privilege tool surface. It targets Interspire Email Marketer
-6.2.3 installs that still need operational care without exposing the full
-legacy admin control plane to agents.
+`interspire-mcp` is a safety-first Rust MCP server and reference
+implementation for wrapping newsletter operations in a narrow, auditable,
+least-privilege tool surface. It targets Interspire Email Marketer 6.x and 8.x
+installs that need operational care without exposing the full admin control
+plane to agents. The original hardening target was an older Interspire 6.2.3
+deployment; newer admin surfaces should be configured explicitly with
+`INTERSPIRE_VERSION=8.x` where possible.
 
 It gives agents and operators structured answers to the questions that matter
 before newsletter work goes wrong:
@@ -20,16 +22,21 @@ before newsletter work goes wrong:
   apply only that narrow plan with explicit write gates?
 - Can we stage a no-send campaign, list, user, or non-secret settings edit
   with preview/apply proof instead of clicking through the brittle admin UI?
+- When server setup requires a saved admin value, can we query one exact
+  approved field without turning normal readbacks into secret dumps?
 
 The server is read-only by default. Its write-class capabilities are limited to
 guarded queue cancel/delete plus guarded no-send campaign, list, user, and
 non-secret settings edits. All apply paths stay disabled unless the runtime
 explicitly enables guarded writes and the matching control flags.
+The narrow sensitive-read tool is also disabled by default and requires both a
+runtime gate and per-call acknowledgement before it can return unredacted setup
+values.
 
 ## What Makes This Different
 
 This is not a generic Interspire API wrapper and it is not a browser automation
-server. It is a curated MCP facade over a legacy split control plane:
+server. It is a curated MCP facade over a split newsletter control plane:
 
 - the XML API is preferred wherever it has stable source authority;
 - authenticated admin HTML is used only for specific gaps the XML API cannot
@@ -43,17 +50,18 @@ server. It is a curated MCP facade over a legacy split control plane:
 - send, schedule, import, contact mutation, suppression mutation, secret,
   provider, DNS, and generic admin tools are intentionally absent.
 
-The result is a concrete example of the legacy-system adapter pattern described
+The result is a concrete example of the constrained adapter pattern described
 in [`mcp-toolkit-rs`](https://github.com/sednalabs/mcp-toolkit-rs/blob/main/docs/legacy-system-adapter-pattern.md):
-wrap a risky old control plane with a small set of operator-intent tools,
+wrap a high-impact admin control plane with a small set of operator-intent tools,
 strong negative surface area, and auditable preview/apply boundaries.
 
 ## Why This Exists
 
-Interspire 6.2.3 is legacy software, but many installs still carry important
-newsletter lists, suppression history, campaign drafts, and operational state.
-The usual way to inspect it is a brittle admin UI. The usual way to automate it
-is worse: broad API calls, raw HTML scraping, or direct database access.
+Older Interspire deployments and long-running newsletter installations often
+carry important lists, suppression history, campaign drafts, and operational
+state. The usual way to inspect that state is an admin UI designed for humans,
+not agents. The usual way to automate it is worse: broad API calls, raw HTML
+scraping, or direct database access.
 
 This project takes a narrower route. It exposes first-class MCP intent tools
 with compact, redacted JSON output. The tools are designed for operator
@@ -65,7 +73,7 @@ questions, not for generic administrative access.
 | --- | --- | --- |
 | `interspire_status` | Read | Report configuration, safety posture, and available capabilities. |
 | `interspire_list_summary` | Read | Summarize lists and aggregate subscriber-state counts. |
-| `interspire_contact_state` | Read | Check one redacted contact's XML list presence. |
+| `interspire_contact_state` | Read | Check one redacted contact's XML list presence, with low-confidence warnings for uncorroborated absence. |
 | `interspire_list_owner_readback` | Read | Read list owner, reply-to, and bounce metadata. |
 | `interspire_settings_audit` | Read | Read redacted global email, bounce, and cron settings. |
 | `interspire_user_smtp_readback` | Read | Read redacted per-user SMTP override state. |
@@ -81,6 +89,7 @@ questions, not for generic administrative access.
 | `interspire_user_update_apply` | Guarded apply | Apply one previously previewed user edit when guarded form-write gates are enabled. |
 | `interspire_settings_update_preview` | Read preview | Preview guarded non-secret application, email, bounce, or cron settings edits. |
 | `interspire_settings_update_apply` | Guarded apply | Apply one previously previewed non-secret settings edit when guarded form-write gates are enabled. |
+| `interspire_sensitive_field_query` | Sensitive read | Query exact approved setup fields with unredacted values after `INTERSPIRE_SENSITIVE_READS=1` and `acknowledge_sensitive_output=true`. |
 | `interspire_warmup_audience_readiness` | Read | Report specified-list warm-up universe coverage and warnings. |
 | `interspire_audience_hygiene_export` | Private artifact | Export candidate audience artifacts outside git with aggregate MCP output only. |
 | `interspire_audience_hygiene_export_begin` | Private artifact | Start a checkpointed audience export job and advance a bounded number of subscriber queries. |
@@ -96,8 +105,8 @@ mutation tool, SMTP password tool, provider tool, or DNS tool.
 Build from source:
 
 ```bash
-git clone https://github.com/sednalabs/interspire-6-mcp.git
-cd interspire-6-mcp
+git clone https://github.com/sednalabs/interspire-mcp.git
+cd interspire-mcp
 cargo build --release
 ```
 
@@ -110,7 +119,7 @@ INTERSPIRE_XML_TOKEN='redacted-token' \
 INTERSPIRE_ADMIN_BASE_URL='https://example.invalid/admin/' \
 INTERSPIRE_ADMIN_USERNAME='admin-user' \
 INTERSPIRE_ADMIN_PASSWORD='redacted-password' \
-target/release/interspire-6-mcp
+target/release/interspire-mcp
 ```
 
 Register it with an MCP client by pointing the client at the built binary and
@@ -119,8 +128,8 @@ passing credentials through the client's secret/environment mechanism:
 ```json
 {
   "mcpServers": {
-    "interspire-6": {
-      "command": "/path/to/interspire-6-mcp/target/release/interspire-6-mcp",
+    "interspire": {
+      "command": "/path/to/interspire-mcp/target/release/interspire-mcp",
       "env": {
         "INTERSPIRE_XML_ENDPOINT": "https://example.invalid/xml.php",
         "INTERSPIRE_XML_USERNAME": "xml-user",
@@ -149,10 +158,15 @@ saved admin HTML, provider payloads, or recipient artifacts.
 Core XML API variables:
 
 ```bash
+INTERSPIRE_VERSION=auto
 INTERSPIRE_XML_ENDPOINT='https://example.invalid/xml.php'
 INTERSPIRE_XML_USERNAME='xml-user'
 INTERSPIRE_XML_TOKEN='redacted-token'
 ```
+
+`INTERSPIRE_VERSION` accepts `auto`, `6.2.3`, and `8.x`. The default is
+`auto`. Set `6.2.3` for older installations and `8.x` for newer admin login
+surfaces that expose JavaScript CSRF tokens such as `IEM_CSRF_TOKEN`.
 
 Admin HTML fallback variables:
 
@@ -180,6 +194,19 @@ INTERSPIRE_CONTACT_WRITE_CONTROLS=0
 INTERSPIRE_SEND_CONTROLS=0
 INTERSPIRE_PRODUCTION_SEND_CONTROLS=0
 ```
+
+Sensitive read variable, disabled by default:
+
+```bash
+INTERSPIRE_SENSITIVE_READS=1
+```
+
+`interspire_sensitive_field_query` is for setup/debugging cases where an
+operator explicitly needs one saved non-password value such as an SMTP host,
+reply-to address, or bounce mailbox. It requires exact field names, a reviewed
+target, `INTERSPIRE_SENSITIVE_READS=1`, and
+`acknowledge_sensitive_output=true`. Password, token, license, cookie, API-key,
+and similar fields are denied even when this gate is enabled.
 
 Private audience artifact variables:
 
@@ -251,7 +278,7 @@ Example:
 ```bash
 export INTERSPIRE_AUDIENCE_HYGIENE_ROOTS=/secure/private
 
-interspire-6-mcp audience-hygiene-export \
+interspire-mcp audience-hygiene-export \
   --source-list-ids 7,8,9 \
   --output-dir /secure/private/interspire-audience-hygiene \
   --artifact-prefix example-run
@@ -268,17 +295,17 @@ For large list exports, prefer the checkpointed flow so one MCP call does not
 have to finish the full XML traversal:
 
 ```bash
-target/release/interspire-6-mcp audience-hygiene-export-begin \
+target/release/interspire-mcp audience-hygiene-export-begin \
   --source-list-ids 7,8 \
   --output-dir /secure/private/interspire-audience-hygiene \
   --artifact-prefix example-run \
   --max-queries-per-call 4
 
-target/release/interspire-6-mcp audience-hygiene-export-status \
+target/release/interspire-mcp audience-hygiene-export-status \
   --job-id iah_123 \
   --output-dir /secure/private/interspire-audience-hygiene
 
-target/release/interspire-6-mcp audience-hygiene-export-resume \
+target/release/interspire-mcp audience-hygiene-export-resume \
   --job-id iah_123 \
   --output-dir /secure/private/interspire-audience-hygiene \
   --max-queries-per-call 4

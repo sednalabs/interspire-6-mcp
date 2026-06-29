@@ -10,6 +10,7 @@ question without creating a new way to send mail or corrupt list state.
 - Queue-control writes are separately disabled by default.
 - Form-write controls are separately disabled by default.
 - Guarded apply defaults to `preview_apply`, not direct mutation.
+- Sensitive reads are disabled by default and require explicit acknowledgement.
 - Private audience exports require an explicit private artifact root.
 - Tool output is redacted and aggregate wherever raw recipient or credential
   data might appear.
@@ -137,6 +138,31 @@ password fields, contact state, or suppression state.
 
 Form apply does not authorize sending and does not mutate contacts,
 suppression state, import/export state, provider APIs, or DNS.
+
+## Sensitive Field Query
+
+The sensitive field query is a special read-only setup tool. It exists for
+cases where redacted readbacks are not enough to configure or migrate a server,
+but it deliberately avoids becoming a broad secret-viewing surface.
+
+Controls:
+
+- requires `INTERSPIRE_SENSITIVE_READS=1`;
+- requires `acknowledge_sensitive_output=true` on every call;
+- requires exact field names instead of dumping whole forms;
+- uses toolkit policy-core boundary checks before any admin read;
+- uses Interspire-owned allowlists for each settings/list target;
+- denies password, token, license, cookie, API-key, private-key, credential,
+  and similar fields even when the runtime gate is enabled;
+- marks the MCP descriptor as model-only, sensitive-output, approval-required,
+  and read-only.
+
+The current allowlist is limited to setup and migration-critical settings plus
+list sender/reply/bounce email fields. User and campaign targets reveal no
+fields; adding them would be a separate public contract change.
+
+This tool does not mutate Interspire, provider APIs, DNS, contact state, list
+state, suppression state, or send state. Normal readback tools remain redacted.
 
 ## Private Audience Artifacts
 

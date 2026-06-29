@@ -1,7 +1,7 @@
 # Dependency Governance
 
 This document defines dependency selection and upgrade policy for
-`interspire-6-mcp`.
+`interspire-mcp`.
 
 ## Goal
 
@@ -83,3 +83,36 @@ to ignore stale dependencies.
   dependency debt. Keep the exception visible in both `deny.toml` and
   `scripts/dependency_governance_check.sh`, and revisit it when replacing the
   HTML parsing stack or when `selectors` moves away from `fxhash`.
+
+## Current Direct Git Dependencies
+
+`mcp-toolkit`, `mcp-toolkit-core`, `mcp-toolkit-observability`,
+`mcp-toolkit-policy-core`, and `mcp-toolkit-testing` are pinned to
+`sednalabs/mcp-toolkit-rs` commit
+`358f5da30f898451fe8b9a3acf0ae2237a88a1dd`.
+
+Dependency change note
+- crate: MCP Toolkit crates, public git pin
+- change type: upgrade
+- purpose: use the shared sensitive-read posture, Apps SDK metadata helper,
+  policy-core decision helper, and redaction helper instead of implementing
+  those generic MCP safety primitives locally.
+- alternatives considered: local Interspire-only policy code, or waiting for a
+  published toolkit crate release. Local-only code would duplicate generic MCP
+  safety behaviour, and waiting would block the public Interspire release.
+- maintenance evidence: the dependency is maintained in the Sedna Labs MCP
+  Toolkit repository and the pinned commit is covered by the upstream
+  sensitive-read primitive pull request.
+- adoption/reputation evidence: the toolkit is the shared Sedna Labs MCP
+  foundation used by this server and sibling MCP implementations.
+- security status: `./scripts/dependency_governance_check.sh` must pass before
+  release; advisory exceptions remain documented above.
+- license status: toolkit crates are public Sedna Labs crates governed by the
+  repository license and this repository's `deny.toml` source/license policy.
+- startup impact: no expected runtime startup regression; helpers are policy,
+  metadata, and redaction code on existing call paths.
+- rollback plan: revert the sensitive-read integration and return to the
+  previous redacted-only readback surface, or move the git pin to the first
+  released toolkit version that contains the same primitives.
+- exception: temporary public git pin until the toolkit branch lands and a
+  release tag or crate publication is available.

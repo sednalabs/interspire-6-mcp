@@ -34,7 +34,6 @@
             "type": "array"
           }
         },
-        "title": "AudienceHygieneExportRequest",
         "type": "object"
       },
       "name": "interspire_audience_hygiene_export"
@@ -79,7 +78,6 @@
             "type": "array"
           }
         },
-        "title": "AudienceHygieneExportBeginRequest",
         "type": "object"
       },
       "name": "interspire_audience_hygiene_export_begin"
@@ -110,7 +108,6 @@
         "required": [
           "job_id"
         ],
-        "title": "AudienceHygieneExportResumeRequest",
         "type": "object"
       },
       "name": "interspire_audience_hygiene_export_resume"
@@ -134,7 +131,6 @@
         "required": [
           "job_id"
         ],
-        "title": "AudienceHygieneExportStatusRequest",
         "type": "object"
       },
       "name": "interspire_audience_hygiene_export_status"
@@ -163,7 +159,6 @@
             ]
           }
         },
-        "title": "CampaignReadbackRequest",
         "type": "object"
       },
       "name": "interspire_campaign_readback"
@@ -219,7 +214,6 @@
           "campaign_id",
           "plan_id"
         ],
-        "title": "CampaignUpdateApplyRequest",
         "type": "object"
       },
       "name": "interspire_campaign_update_apply"
@@ -271,7 +265,6 @@
         "required": [
           "campaign_id"
         ],
-        "title": "CampaignUpdatePreviewRequest",
         "type": "object"
       },
       "name": "interspire_campaign_update_preview"
@@ -294,7 +287,6 @@
           "email",
           "list_id"
         ],
-        "title": "ContactStateRequest",
         "type": "object"
       },
       "name": "interspire_contact_state"
@@ -314,7 +306,6 @@
             ]
           }
         },
-        "title": "ListOwnerReadbackRequest",
         "type": "object"
       },
       "name": "interspire_list_owner_readback"
@@ -337,7 +328,6 @@
             "type": "integer"
           }
         },
-        "title": "ListSummaryRequest",
         "type": "object"
       },
       "name": "interspire_list_summary"
@@ -393,7 +383,6 @@
           "list_id",
           "plan_id"
         ],
-        "title": "ListUpdateApplyRequest",
         "type": "object"
       },
       "name": "interspire_list_update_apply"
@@ -445,7 +434,6 @@
         "required": [
           "list_id"
         ],
-        "title": "ListUpdatePreviewRequest",
         "type": "object"
       },
       "name": "interspire_list_update_preview"
@@ -475,7 +463,6 @@
           "plan_id",
           "action"
         ],
-        "title": "QueueControlApplyRequest",
         "type": "object"
       },
       "name": "interspire_queue_control_apply"
@@ -497,7 +484,6 @@
             ]
           }
         },
-        "title": "QueueControlPreviewRequest",
         "type": "object"
       },
       "name": "interspire_queue_control_preview"
@@ -517,10 +503,143 @@
             ]
           }
         },
-        "title": "QueueStatsReadbackRequest",
         "type": "object"
       },
       "name": "interspire_queue_stats_readback"
+    },
+    {
+      "_meta": {
+        "approval_required": true,
+        "openai/widgetAccessible": false,
+        "securitySchemes": [
+          {
+            "type": "noauth"
+          }
+        ],
+        "sensitivity": "unredacted_admin_form_values",
+        "ui": {
+          "visibility": [
+            "model"
+          ]
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true,
+        "title": "Sensitive field query"
+      },
+      "description": "Query exact approved Interspire admin form fields with unredacted values. Requires INTERSPIRE_SENSITIVE_READS=1 and acknowledge_sensitive_output=true.",
+      "inputSchema": {
+        "$defs": {
+          "SensitiveFieldTarget": {
+            "oneOf": [
+              {
+                "properties": {
+                  "kind": {
+                    "const": "settings",
+                    "type": "string"
+                  },
+                  "section": {
+                    "$ref": "#/$defs/SettingsSectionName"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "section"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "list",
+                    "type": "string"
+                  },
+                  "list_id": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "list_id"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "user",
+                    "type": "string"
+                  },
+                  "user_id": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "user_id"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "campaign_id": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "campaign",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "campaign_id"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "SettingsSectionName": {
+            "enum": [
+              "application",
+              "email",
+              "bounce",
+              "cron"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "acknowledge_sensitive_output": {
+            "default": false,
+            "type": "boolean"
+          },
+          "fields": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "target": {
+            "$ref": "#/$defs/SensitiveFieldTarget"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      "name": "interspire_sensitive_field_query"
     },
     {
       "description": "Read redacted Interspire global settings for email, bounce, and cron.",
@@ -532,7 +651,6 @@
             "type": "boolean"
           }
         },
-        "title": "SettingsAuditRequest",
         "type": "object"
       },
       "name": "interspire_settings_audit"
@@ -595,7 +713,6 @@
           "section",
           "plan_id"
         ],
-        "title": "SettingsUpdateApplyRequest",
         "type": "object"
       },
       "name": "interspire_settings_update_apply"
@@ -654,7 +771,6 @@
         "required": [
           "section"
         ],
-        "title": "SettingsUpdatePreviewRequest",
         "type": "object"
       },
       "name": "interspire_settings_update_preview"
@@ -669,7 +785,6 @@
             "type": "boolean"
           }
         },
-        "title": "StatusRequest",
         "type": "object"
       },
       "name": "interspire_status"
@@ -689,7 +804,6 @@
             ]
           }
         },
-        "title": "UserSmtpReadbackRequest",
         "type": "object"
       },
       "name": "interspire_user_smtp_readback"
@@ -745,7 +859,6 @@
           "user_id",
           "plan_id"
         ],
-        "title": "UserUpdateApplyRequest",
         "type": "object"
       },
       "name": "interspire_user_update_apply"
@@ -797,7 +910,6 @@
         "required": [
           "user_id"
         ],
-        "title": "UserUpdatePreviewRequest",
         "type": "object"
       },
       "name": "interspire_user_update_preview"
@@ -843,7 +955,6 @@
             "type": "array"
           }
         },
-        "title": "WarmupAudienceReadinessRequest",
         "type": "object"
       },
       "name": "interspire_warmup_audience_readiness"

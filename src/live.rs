@@ -23,11 +23,11 @@ use crate::{
         ListOwnerReadbackReport, ListOwnerReadbackRequest, ListSummaryReport, ListSummaryRequest,
         ListUpdateApplyRequest, ListUpdatePreviewRequest, QueueControlApplyReport,
         QueueControlApplyRequest, QueueControlPreviewReport, QueueControlPreviewRequest,
-        QueueStatsReadbackReport, QueueStatsReadbackRequest, SettingsAuditReport,
-        SettingsAuditRequest, SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest,
-        StatusReport, StatusRequest, UserSmtpReadbackReport, UserSmtpReadbackRequest,
-        UserUpdateApplyRequest, UserUpdatePreviewRequest, WarmupAudienceReadinessReport,
-        WarmupAudienceReadinessRequest,
+        QueueStatsReadbackReport, QueueStatsReadbackRequest, SensitiveFieldQueryReport,
+        SensitiveFieldQueryRequest, SettingsAuditReport, SettingsAuditRequest,
+        SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport, StatusRequest,
+        UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
+        UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
     },
     xml_api::XmlApiClient,
     InterspireReadBackend,
@@ -174,6 +174,14 @@ impl InterspireReadBackend for LiveInterspireBackend {
         request: &SettingsUpdateApplyRequest,
     ) -> Result<GuardedWriteApplyReport, InterspireError> {
         self.settings_update_apply_impl(request)
+    }
+
+    fn sensitive_field_query(
+        &self,
+        request: &SensitiveFieldQueryRequest,
+    ) -> Result<SensitiveFieldQueryReport, InterspireError> {
+        let html = self.html_client()?;
+        html.sensitive_field_query(request, self.config.sensitive_reads.enabled)
     }
 
     fn warmup_audience_readiness(

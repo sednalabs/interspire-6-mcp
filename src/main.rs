@@ -1,4 +1,4 @@
-use interspire_6_mcp::{
+use interspire_mcp::{
     run_audience_hygiene_export, run_audience_hygiene_export_begin,
     run_audience_hygiene_export_resume, run_audience_hygiene_export_status,
     AudienceHygieneExportBeginRequest, AudienceHygieneExportRequest,
@@ -235,21 +235,21 @@ fn required_value<'a>(args: &'a [String], index: usize, name: &str) -> Result<&'
 }
 
 fn audience_hygiene_export_usage() -> String {
-    "usage: interspire-6-mcp audience-hygiene-export --source-list-ids 7,8 --output-dir /secure/private/interspire-audience-hygiene --artifact-prefix example-run\n\nSet INTERSPIRE_AUDIENCE_HYGIENE_ROOTS=/secure/private before writing recipient artifacts."
+    "usage: interspire-mcp audience-hygiene-export --source-list-ids 7,8 --output-dir /secure/private/interspire-audience-hygiene --artifact-prefix example-run\n\nSet INTERSPIRE_AUDIENCE_HYGIENE_ROOTS=/secure/private before writing recipient artifacts."
         .to_string()
 }
 
 fn audience_hygiene_export_begin_usage() -> String {
-    "usage: interspire-6-mcp audience-hygiene-export-begin --source-list-ids 7,8 --output-dir /secure/private/interspire-audience-hygiene --artifact-prefix example-run --max-queries-per-call 4"
+    "usage: interspire-mcp audience-hygiene-export-begin --source-list-ids 7,8 --output-dir /secure/private/interspire-audience-hygiene --artifact-prefix example-run --max-queries-per-call 4"
         .to_string()
 }
 
 fn audience_hygiene_export_resume_usage() -> String {
-    "usage: interspire-6-mcp audience-hygiene-export-resume --job-id iah_123 --output-dir /secure/private/interspire-audience-hygiene --max-queries-per-call 4"
+    "usage: interspire-mcp audience-hygiene-export-resume --job-id iah_123 --output-dir /secure/private/interspire-audience-hygiene --max-queries-per-call 4"
         .to_string()
 }
 
 fn audience_hygiene_export_status_usage() -> String {
-    "usage: interspire-6-mcp audience-hygiene-export-status --job-id iah_123 --output-dir /secure/private/interspire-audience-hygiene"
+    "usage: interspire-mcp audience-hygiene-export-status --job-id iah_123 --output-dir /secure/private/interspire-audience-hygiene"
         .to_string()
 }
