@@ -1,7 +1,7 @@
 //! Guarded write primitives for narrowly approved Interspire admin actions.
 //!
-//! Interspire 6.2.3 uses legacy admin HTML routes for some operational
-//! workflows. This module keeps mutation controls explicit: preview is
+//! Interspire uses admin HTML routes for some operational workflows. This
+//! module keeps mutation controls explicit: preview is
 //! read-only, apply requires a deterministic plan id plus runtime write
 //! enablement, and every consumer must re-read state after applying.
 //!

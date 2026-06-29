@@ -1,7 +1,7 @@
 # Architecture
 
-`interspire-6-mcp` is a curated stdio MCP server. It wraps legacy Interspire
-Email Marketer 6.2.3 state in typed, redacted, operator-oriented tools.
+`interspire-mcp` is a curated stdio MCP server. It wraps Interspire Email
+Marketer state in typed, redacted, operator-oriented tools.
 
 ## Shape
 
@@ -12,13 +12,15 @@ Email Marketer 6.2.3 state in typed, redacted, operator-oriented tools.
 - Output: compact JSON strings shaped for MCP clients and agent workflows.
 - Safety posture: read-only by default, with guarded queue cancel/delete plus
   guarded no-send campaign, list, user, and non-secret settings apply paths.
+- Sensitive read posture: toolkit-owned metadata and policy preflight, with
+  Interspire-owned target/field allowlists.
 
 ## Legacy Adapter Pattern
 
 This repository is both a service implementation for Interspire Email Marketer
-6.2.3 and a reference implementation of a legacy-system MCP adapter. The useful
-pattern is not "scrape an admin UI"; it is to build a narrow source-authority
-map over a split legacy control plane:
+installs and a reference implementation of a careful admin-control-plane MCP
+adapter. The useful pattern is not "scrape an admin UI"; it is to build a
+narrow source-authority map over a split operational control plane:
 
 - use the stable API first;
 - reach authenticated admin HTML only where the API is incomplete;
@@ -26,6 +28,8 @@ map over a split legacy control plane:
   a reviewed operator purpose;
 - convert upstream state into redacted, typed, task-shaped MCP output;
 - bind every mutation to preview/apply plan ids, runtime gates, and post-apply
+  readback;
+- treat unredacted setup values as explicit sensitive reads, not as ordinary
   readback;
 - publish private recipient or validation artifacts only through private local
   files, with aggregate MCP evidence.
@@ -63,10 +67,13 @@ parsers, and operator wording stay in this repository.
 ## Source Authority
 
 The XML API is preferred for list and subscriber evidence because it has a more
-stable contract than legacy admin HTML. It is the first authority for list and
-subscriber readback wherever it can answer the question. Admin HTML is treated
-as an unsafe substrate and is used only where the XML API is missing important
-operational state:
+stable contract than admin HTML. It is the first authority for positive
+list-presence readback wherever it can answer the question. A negative
+`IsSubscriberOnList` response is not treated as authoritative absence unless
+another source corroborates it; the tool reports low-confidence absence so
+operators do not mistake API-scope gaps for send-readiness proof. Admin HTML is
+treated as a brittle substrate and is used only where the XML API is missing
+important operational state:
 
 - list owner and reply/bounce metadata;
 - global email, bounce, and cron settings;
@@ -94,6 +101,13 @@ queries per call, and lets operators resume safely after MCP/client timeouts.
 Checkpoint resume/status resolves jobs as direct children of that approved root
 and normalizes loaded state back to the resolved directory before any later
 checkpoint read or write.
+
+Sensitive field reads use the MCP Toolkit sensitive-read posture and policy
+decision helper for the generic runtime/acknowledgement/boundary checks.
+Interspire-specific route selection and field allowlists stay in
+`admin_html.rs`. The current allowlist is intentionally limited to setup
+settings plus list sender/reply/bounce email fields; normal readback tools
+continue to redact values.
 
 ## Contract Tests
 

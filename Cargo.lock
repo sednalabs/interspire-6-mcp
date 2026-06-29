@@ -15,6 +15,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aho-corasick"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -782,7 +791,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "interspire-6-mcp"
+name = "interspire-mcp"
 version = "0.1.0"
 dependencies = [
  "csv",
@@ -790,6 +799,8 @@ dependencies = [
  "libc",
  "mcp-toolkit",
  "mcp-toolkit-core",
+ "mcp-toolkit-observability",
+ "mcp-toolkit-policy-core",
  "mcp-toolkit-testing",
  "reqwest",
  "rmcp",
@@ -827,6 +838,12 @@ dependencies = [
  "futures-util",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
@@ -909,16 +926,17 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=76aa657e229d51462d98297bc658b66df1b8a191#76aa657e229d51462d98297bc658b66df1b8a191"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=358f5da30f898451fe8b9a3acf0ae2237a88a1dd#358f5da30f898451fe8b9a3acf0ae2237a88a1dd"
 dependencies = [
  "mcp-toolkit-core",
  "mcp-toolkit-server",
+ "rmcp",
 ]
 
 [[package]]
 name = "mcp-toolkit-core"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=76aa657e229d51462d98297bc658b66df1b8a191#76aa657e229d51462d98297bc658b66df1b8a191"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=358f5da30f898451fe8b9a3acf0ae2237a88a1dd#358f5da30f898451fe8b9a3acf0ae2237a88a1dd"
 dependencies = [
  "rmcp",
  "serde",
@@ -928,7 +946,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-http"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=76aa657e229d51462d98297bc658b66df1b8a191#76aa657e229d51462d98297bc658b66df1b8a191"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=358f5da30f898451fe8b9a3acf0ae2237a88a1dd#358f5da30f898451fe8b9a3acf0ae2237a88a1dd"
 dependencies = [
  "http",
  "serde",
@@ -937,9 +955,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcp-toolkit-observability"
+version = "0.1.0"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=358f5da30f898451fe8b9a3acf0ae2237a88a1dd#358f5da30f898451fe8b9a3acf0ae2237a88a1dd"
+dependencies = [
+ "once_cell",
+ "regex",
+ "serde_json",
+ "time",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "mcp-toolkit-policy-core"
+version = "0.1.0"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=358f5da30f898451fe8b9a3acf0ae2237a88a1dd#358f5da30f898451fe8b9a3acf0ae2237a88a1dd"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mcp-toolkit-server"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=76aa657e229d51462d98297bc658b66df1b8a191#76aa657e229d51462d98297bc658b66df1b8a191"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=358f5da30f898451fe8b9a3acf0ae2237a88a1dd#358f5da30f898451fe8b9a3acf0ae2237a88a1dd"
 dependencies = [
  "rmcp",
  "tokio",
@@ -948,7 +989,7 @@ dependencies = [
 [[package]]
 name = "mcp-toolkit-testing"
 version = "0.1.0"
-source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=76aa657e229d51462d98297bc658b66df1b8a191#76aa657e229d51462d98297bc658b66df1b8a191"
+source = "git+https://github.com/sednalabs/mcp-toolkit-rs?rev=358f5da30f898451fe8b9a3acf0ae2237a88a1dd#358f5da30f898451fe8b9a3acf0ae2237a88a1dd"
 dependencies = [
  "http",
  "mcp-toolkit-core",
@@ -1299,6 +1340,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex"
+version = "1.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1292b7759ae1cb9ec195452d1390a074f0cd8541ab7a5a8c31cd6db45d4a6ba"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-automata"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-syntax"
+version = "0.8.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
 name = "reqwest"
 version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1356,9 +1426,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0810a9f717d9828f475fe1f629f4c305c8464b7f496c3a854b58d29e65f4058e"
+checksum = "1d1f571c72940a19d9532fe52dbea8bc9912bf1d766c2970bb824056b86f3f59"
 dependencies = [
  "async-trait",
  "base64",
@@ -1378,9 +1448,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "1.7.0"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aefac48c364756e97f04c0401ba3231e8607882c7c1d92da0437dc16307904d"
+checksum = "1aad0035b69380782d78ea95b508327e6deaa2235909053e596eea8f27b5e1d5"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -1633,6 +1703,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sharded-slab"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1769,6 +1848,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "thread_local"
+version = "1.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -1949,6 +2037,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.3.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
+dependencies = [
+ "sharded-slab",
+ "thread_local",
+ "tracing-core",
 ]
 
 [[package]]

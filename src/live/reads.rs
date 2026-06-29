@@ -43,9 +43,11 @@ impl LiveInterspireBackend {
         Ok(StatusReport {
             ok: true,
             configured: xml_configured || admin_html_configured,
+            interspire_version: self.config.version,
             xml_configured,
             admin_html_configured,
             guarded_writes_enabled: self.config.guarded_writes.enabled,
+            sensitive_reads_enabled: self.config.sensitive_reads.enabled,
             queue_controls_enabled: self.config.guarded_writes.queue_controls_enabled,
             form_write_controls_enabled: self.config.guarded_writes.form_write_controls_enabled,
             contact_write_controls_enabled: self
@@ -78,6 +80,7 @@ impl LiveInterspireBackend {
                 "interspire_user_update_apply".to_string(),
                 "interspire_settings_update_preview".to_string(),
                 "interspire_settings_update_apply".to_string(),
+                "interspire_sensitive_field_query".to_string(),
                 "interspire_warmup_audience_readiness".to_string(),
                 "interspire_audience_hygiene_export".to_string(),
                 "interspire_audience_hygiene_export_begin".to_string(),
@@ -169,7 +172,11 @@ impl LiveInterspireBackend {
                 email_redacted: redact::redact_email(&request.email),
                 email_hash: redact::email_hash(&request.email),
                 found_on_list: None,
+                xml_found_on_list: None,
                 state: "unknown_xml_not_configured".to_string(),
+                source_authority: "none".to_string(),
+                confidence: "unknown".to_string(),
+                verification_sources: Vec::new(),
                 warnings: vec![
                     "XML API is not configured; no live contact read attempted".to_string()
                 ],
@@ -178,25 +185,32 @@ impl LiveInterspireBackend {
         }
 
         let found = xml.is_subscriber_on_list(&request.email, request.list_id)?;
+        let outcome = contact_state_outcome(found);
         Ok(ContactStateReport {
             ok: true,
             configured: true,
             list_id: request.list_id,
             email_redacted: redact::redact_email(&request.email),
             email_hash: redact::email_hash(&request.email),
-            found_on_list: Some(found),
-            state: if found {
-                "present_on_list".to_string()
-            } else {
-                "not_found_on_list".to_string()
-            },
-            warnings: vec![
-                "XML IsSubscriberOnList proves presence only; it does not prove bounce, unsubscribe, or provider suppression reconciliation".to_string(),
-            ],
-            evidence: xml_api::xml_evidence(vec![
-                "subscribers/IsSubscriberOnList XML API read".to_string(),
-                "admin HTML contact fallback intentionally omitted in v1".to_string(),
-            ]),
+            found_on_list: outcome.found_on_list,
+            xml_found_on_list: Some(found),
+            state: outcome.state.to_string(),
+            source_authority: outcome.source_authority.to_string(),
+            confidence: outcome.confidence.to_string(),
+            verification_sources: vec!["interspire_xml_api".to_string()],
+            warnings: outcome
+                .warnings
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            evidence: xml_api::xml_evidence(
+                [
+                    "subscribers/IsSubscriberOnList XML API read".to_string(),
+                    outcome.evidence_note.to_string(),
+                ]
+                .into_iter()
+                .collect(),
+            ),
         })
     }
 
@@ -358,5 +372,74 @@ impl LiveInterspireBackend {
             request.campaign_id,
             cap_usize(request.max_rows.unwrap_or(25), 100),
         )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContactStateOutcome {
+    found_on_list: Option<bool>,
+    state: &'static str,
+    source_authority: &'static str,
+    confidence: &'static str,
+    evidence_note: &'static str,
+    warnings: &'static [&'static str],
+}
+
+fn contact_state_outcome(found: bool) -> ContactStateOutcome {
+    if found {
+        return ContactStateOutcome {
+            found_on_list: Some(true),
+            state: "present_on_list",
+            source_authority: "interspire_xml_api",
+            confidence: "high_presence",
+            evidence_note: "XML positive membership is treated as list-presence evidence",
+            warnings: &[
+                "XML IsSubscriberOnList proves list presence only; it does not prove bounce, unsubscribe, or provider suppression reconciliation",
+            ],
+        };
+    }
+
+    ContactStateOutcome {
+        found_on_list: None,
+        state: "not_found_on_list_uncorroborated",
+        source_authority: "interspire_xml_api_presence_probe",
+        confidence: "low_absence",
+        evidence_note: "admin HTML/contact export absence corroboration not performed",
+        warnings: &[
+            "XML IsSubscriberOnList false is not authoritative absence; confirm with admin HTML, contact export, or another authoritative contact-state read before send-readiness decisions",
+            "This avoids treating API-scope gaps as definitive list absence for newly created, resubscribed, or UI-visible contacts",
+            "XML IsSubscriberOnList does not prove bounce, unsubscribe, or provider suppression reconciliation",
+        ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contact_state_outcome;
+
+    #[test]
+    fn xml_negative_contact_state_is_low_confidence_absence() {
+        let outcome = contact_state_outcome(false);
+
+        assert_eq!(outcome.state, "not_found_on_list_uncorroborated");
+        assert_eq!(outcome.found_on_list, None);
+        assert_eq!(outcome.confidence, "low_absence");
+        assert!(outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("not authoritative absence")));
+    }
+
+    #[test]
+    fn xml_positive_contact_state_is_high_confidence_presence_only() {
+        let outcome = contact_state_outcome(true);
+
+        assert_eq!(outcome.state, "present_on_list");
+        assert_eq!(outcome.found_on_list, Some(true));
+        assert_eq!(outcome.confidence, "high_presence");
+        assert!(outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("list presence only")));
     }
 }

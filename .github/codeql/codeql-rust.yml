@@ -1,4 +1,4 @@
-name: interspire-6-mcp-codeql-rust
+name: interspire-mcp-codeql-rust
 
 queries:
   - uses: security-and-quality

@@ -3,7 +3,7 @@ use mcp_toolkit_testing::stdio_contract::assert_stdio_tools_list;
 #[test]
 fn stdio_initializes_and_lists_tools() {
     assert_stdio_tools_list(
-        env!("CARGO_BIN_EXE_interspire-6-mcp"),
+        env!("CARGO_BIN_EXE_interspire-mcp"),
         &[
             "interspire_audience_hygiene_export",
             "interspire_audience_hygiene_export_begin",
@@ -20,6 +20,7 @@ fn stdio_initializes_and_lists_tools() {
             "interspire_queue_control_apply",
             "interspire_queue_control_preview",
             "interspire_queue_stats_readback",
+            "interspire_sensitive_field_query",
             "interspire_settings_audit",
             "interspire_settings_update_apply",
             "interspire_settings_update_preview",

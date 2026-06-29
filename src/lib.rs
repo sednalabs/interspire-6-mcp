@@ -1,6 +1,6 @@
-//! # Interspire 6.2.3 MCP
+//! # Interspire MCP
 //!
-//! Curated stdio MCP server for safe Interspire Email Marketer 6.2.3
+//! Curated stdio MCP server for safe Interspire Email Marketer
 //! operational readback plus guarded no-send queue and form-write paths.
 //!
 //! ## Rationale
@@ -44,12 +44,14 @@ mod response;
 mod safety;
 mod xml_api;
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
-pub use config::{AdminHtmlConfig, InterspireServerConfig, XmlApiConfig};
+pub use config::{AdminHtmlConfig, InterspireServerConfig, InterspireVersion, XmlApiConfig};
 pub use error::InterspireError;
-use mcp_toolkit_core::tool_inventory::{
-    ToolCapability, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError,
+use mcp_toolkit_core::{
+    guarded_action::GuardedActionPosture,
+    mcp_apps::with_mcp_apps_sensitive_output_metadata,
+    tool_inventory::{ToolCapability, ToolDiscoveryMetadata, ToolInventory, ToolInventoryError},
 };
 pub use response::{
     AudienceHygieneArtifact, AudienceHygieneExportBeginRequest, AudienceHygieneExportReport,
@@ -62,7 +64,9 @@ pub use response::{
     ListUpdateApplyRequest, ListUpdatePreviewRequest, QueueControlAction, QueueControlApplyReport,
     QueueControlApplyRequest, QueueControlCandidate, QueueControlPreviewReport,
     QueueControlPreviewRequest, QueueStatsReadbackReport, QueueStatsReadbackRequest,
-    SettingsAuditReport, SettingsAuditRequest, SettingsSectionName, SettingsUpdateApplyRequest,
+    SensitiveFieldDenial, SensitiveFieldQueryReport, SensitiveFieldQueryRequest,
+    SensitiveFieldTarget, SensitiveFieldValue, SensitiveToolMetadata, SettingsAuditReport,
+    SettingsAuditRequest, SettingsSectionName, SettingsUpdateApplyRequest,
     SettingsUpdatePreviewRequest, StatusReport, StatusRequest, UserSmtpReadbackReport,
     UserSmtpReadbackRequest, UserUpdateApplyRequest, UserUpdatePreviewRequest,
     WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest, DEFAULT_HYGIENE_QUERY_BUDGET,
@@ -70,8 +74,12 @@ pub use response::{
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo, Tool},
-    tool, tool_handler, tool_router, ServerHandler,
+    model::{
+        ListToolsResult, Meta, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+        ToolAnnotations,
+    },
+    service::{RequestContext, RoleServer},
+    tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
 
 pub fn run_audience_hygiene_export(
@@ -176,6 +184,10 @@ pub trait InterspireReadBackend: Send + Sync {
         &self,
         request: &SettingsUpdateApplyRequest,
     ) -> Result<GuardedWriteApplyReport, InterspireError>;
+    fn sensitive_field_query(
+        &self,
+        request: &SensitiveFieldQueryRequest,
+    ) -> Result<SensitiveFieldQueryReport, InterspireError>;
     fn warmup_audience_readiness(
         &self,
         request: &WarmupAudienceReadinessRequest,
@@ -343,6 +355,19 @@ impl InterspireMcpServer {
                         "Apply guarded non-secret Interspire settings edits.",
                         ["interspire", "settings", "apply", "guarded-write"],
                     )),
+                ToolCapability::new("interspire_sensitive_field_query")
+                    .with_group("sensitive-read")
+                    .with_risk_posture(GuardedActionPosture::sensitive_read())
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Query exact approved Interspire admin form fields with unredacted values after runtime and acknowledgement gates.",
+                        [
+                            "interspire",
+                            "sensitive",
+                            "unredacted",
+                            "field",
+                            "setup",
+                        ],
+                    )),
                 ToolCapability::new("interspire_warmup_audience_readiness")
                     .with_group("read")
                     .with_read_only(true)
@@ -383,7 +408,11 @@ impl InterspireMcpServer {
     }
 
     pub fn tool_schema_snapshot(&self) -> Vec<Tool> {
-        self.tool_router.list_all()
+        self.tool_router
+            .list_all()
+            .into_iter()
+            .map(with_interspire_tool_metadata)
+            .collect()
     }
 
     pub fn inventory(&self) -> &ToolInventory {
@@ -539,6 +568,16 @@ impl InterspireMcpServer {
     }
 
     #[tool(
+        description = "Query exact approved Interspire admin form fields with unredacted values. Requires INTERSPIRE_SENSITIVE_READS=1 and acknowledge_sensitive_output=true."
+    )]
+    fn interspire_sensitive_field_query(
+        &self,
+        Parameters(request): Parameters<SensitiveFieldQueryRequest>,
+    ) -> String {
+        response::tool_json(self.backend.sensitive_field_query(&request))
+    }
+
+    #[tool(
         description = "Assess a specified-list warm-up audience from Interspire list counts without exporting contacts."
     )]
     fn interspire_warmup_audience_readiness(
@@ -593,8 +632,37 @@ impl InterspireMcpServer {
 impl ServerHandler for InterspireMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("Safe Interspire Email Marketer 6.2.3 evidence tools. Mutations are disabled by default and limited to guarded queue cancel/delete plus explicitly gated campaign, list, user, and settings apply plans.")
+            .with_instructions("Safe Interspire Email Marketer evidence tools. Mutations are disabled by default and limited to guarded queue cancel/delete plus explicitly gated campaign, list, user, and settings apply plans.")
     }
+
+    fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+        std::future::ready(Ok(ListToolsResult {
+            meta: None,
+            tools: self.tool_schema_snapshot(),
+            next_cursor: None,
+        }))
+    }
+}
+
+fn with_interspire_tool_metadata(tool: Tool) -> Tool {
+    if tool.name.as_ref() != "interspire_sensitive_field_query" {
+        return tool;
+    }
+
+    let meta =
+        with_mcp_apps_sensitive_output_metadata(Some(Meta::new()), "unredacted_admin_form_values");
+    tool.with_annotations(
+        ToolAnnotations::with_title("Sensitive field query")
+            .read_only(true)
+            .destructive(false)
+            .idempotent(true)
+            .open_world(false),
+    )
+    .with_meta(meta)
 }
 
 #[cfg(test)]
@@ -761,6 +829,13 @@ mod tests {
             ))
         }
 
+        fn sensitive_field_query(
+            &self,
+            _request: &SensitiveFieldQueryRequest,
+        ) -> Result<SensitiveFieldQueryReport, InterspireError> {
+            Ok(SensitiveFieldQueryReport::fixture())
+        }
+
         fn warmup_audience_readiness(
             &self,
             _request: &WarmupAudienceReadinessRequest,
@@ -824,6 +899,7 @@ mod tests {
                 "interspire_queue_control_apply",
                 "interspire_queue_control_preview",
                 "interspire_queue_stats_readback",
+                "interspire_sensitive_field_query",
                 "interspire_settings_audit",
                 "interspire_settings_update_apply",
                 "interspire_settings_update_preview",
@@ -844,5 +920,31 @@ mod tests {
                 .inventory()
                 .is_allowed(name, ToolOperation::Call, &policy));
         }
+    }
+
+    #[test]
+    fn sensitive_tool_descriptor_is_marked_approval_required() {
+        let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend))
+            .unwrap_or_else(|err| panic!("server inventory must build: {err}"));
+        let tool = server
+            .tool_schema_snapshot()
+            .into_iter()
+            .find(|tool| tool.name.as_ref() == "interspire_sensitive_field_query")
+            .unwrap_or_else(|| panic!("sensitive tool should be listed"));
+        let meta = tool
+            .meta
+            .unwrap_or_else(|| panic!("sensitive tool should include Apps metadata"));
+
+        assert_eq!(meta.0["approval_required"], serde_json::json!(true));
+        assert_eq!(
+            meta.0["sensitivity"],
+            serde_json::json!("unredacted_admin_form_values")
+        );
+        assert_eq!(meta.0["openai/widgetAccessible"], serde_json::json!(false));
+        assert_eq!(
+            tool.annotations
+                .and_then(|annotations| annotations.read_only_hint),
+            Some(true)
+        );
     }
 }

@@ -1,4 +1,4 @@
-name: interspire-6-mcp-codeql-actions
+name: interspire-mcp-codeql-actions
 
 queries:
   - uses: security-and-quality

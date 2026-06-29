@@ -1,4 +1,8 @@
-use crate::{config::WriteExecutionMode, error::InterspireError, redact};
+use crate::{
+    config::{InterspireVersion, WriteExecutionMode},
+    error::InterspireError,
+    redact,
+};
 use serde::Serialize;
 
 #[derive(Debug, Clone, serde::Deserialize, rmcp::schemars::JsonSchema)]
@@ -65,9 +69,11 @@ pub struct Evidence {
 pub struct StatusReport {
     pub ok: bool,
     pub configured: bool,
+    pub interspire_version: InterspireVersion,
     pub xml_configured: bool,
     pub admin_html_configured: bool,
     pub guarded_writes_enabled: bool,
+    pub sensitive_reads_enabled: bool,
     pub queue_controls_enabled: bool,
     pub form_write_controls_enabled: bool,
     pub contact_write_controls_enabled: bool,
@@ -112,7 +118,11 @@ pub struct ContactStateReport {
     pub email_redacted: String,
     pub email_hash: String,
     pub found_on_list: Option<bool>,
+    pub xml_found_on_list: Option<bool>,
     pub state: String,
+    pub source_authority: String,
+    pub confidence: String,
+    pub verification_sources: Vec<String>,
     pub warnings: Vec<String>,
     pub evidence: Evidence,
 }
@@ -202,9 +212,11 @@ impl StatusReport {
         Self {
             ok: true,
             configured: true,
+            interspire_version: InterspireVersion::Auto,
             xml_configured: true,
             admin_html_configured: false,
             guarded_writes_enabled: false,
+            sensitive_reads_enabled: false,
             queue_controls_enabled: false,
             form_write_controls_enabled: false,
             contact_write_controls_enabled: false,
@@ -231,6 +243,7 @@ impl StatusReport {
                 "interspire_user_update_apply".to_string(),
                 "interspire_settings_update_preview".to_string(),
                 "interspire_settings_update_apply".to_string(),
+                "interspire_sensitive_field_query".to_string(),
                 "interspire_warmup_audience_readiness".to_string(),
                 "interspire_audience_hygiene_export".to_string(),
                 "interspire_audience_hygiene_export_begin".to_string(),
@@ -385,7 +398,11 @@ impl ContactStateReport {
             email_redacted: redact::redact_email(email),
             email_hash: redact::email_hash(email),
             found_on_list: Some(true),
+            xml_found_on_list: Some(true),
             state: "present_on_list".to_string(),
+            source_authority: "interspire_xml_api".to_string(),
+            confidence: "high_presence".to_string(),
+            verification_sources: vec!["interspire_xml_api".to_string()],
             warnings: Vec::new(),
             evidence: Evidence {
                 source: "fixture".to_string(),
@@ -499,5 +516,33 @@ mod tests {
         assert!(!message.contains("session-value"));
         assert!(!message.contains("key-secret"));
         assert!(!message.contains("quoted-secret"));
+    }
+
+    #[test]
+    fn uncorroborated_negative_contact_state_does_not_serialize_as_definitive_absence() {
+        let report = ContactStateReport {
+            ok: true,
+            configured: true,
+            list_id: 7,
+            email_redacted: redact::redact_email("person@example.com"),
+            email_hash: redact::email_hash("person@example.com"),
+            found_on_list: None,
+            xml_found_on_list: Some(false),
+            state: "not_found_on_list_uncorroborated".to_string(),
+            source_authority: "interspire_xml_api_presence_probe".to_string(),
+            confidence: "low_absence".to_string(),
+            verification_sources: vec!["interspire_xml_api".to_string()],
+            warnings: vec!["XML false is not authoritative absence".to_string()],
+            evidence: Evidence {
+                source: "interspire_xml_api".to_string(),
+                notes: vec!["synthetic negative XML probe".to_string()],
+            },
+        };
+        let value = serde_json::to_value(&report).expect("serialize contact state");
+
+        assert!(value["found_on_list"].is_null());
+        assert_eq!(value["xml_found_on_list"], false);
+        assert_eq!(value["confidence"], "low_absence");
+        assert_eq!(value["state"], "not_found_on_list_uncorroborated");
     }
 }

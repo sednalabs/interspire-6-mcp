@@ -1,4 +1,4 @@
-use interspire_6_mcp::{
+use interspire_mcp::{
     AudienceHygieneExportBeginRequest, AudienceHygieneExportReport, AudienceHygieneExportRequest,
     AudienceHygieneExportResumeRequest, AudienceHygieneExportStatusRequest, CampaignReadbackReport,
     CampaignReadbackRequest, CampaignUpdateApplyRequest, CampaignUpdatePreviewRequest,
@@ -7,7 +7,8 @@ use interspire_6_mcp::{
     ListOwnerReadbackReport, ListOwnerReadbackRequest, ListSummary, ListSummaryReport,
     ListSummaryRequest, ListUpdateApplyRequest, ListUpdatePreviewRequest, QueueControlApplyReport,
     QueueControlApplyRequest, QueueControlPreviewReport, QueueControlPreviewRequest,
-    QueueStatsReadbackReport, QueueStatsReadbackRequest, SettingsAuditReport, SettingsAuditRequest,
+    QueueStatsReadbackReport, QueueStatsReadbackRequest, SensitiveFieldQueryReport,
+    SensitiveFieldQueryRequest, SettingsAuditReport, SettingsAuditRequest,
     SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport, StatusRequest,
     UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
     UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
@@ -174,6 +175,13 @@ impl InterspireReadBackend for ContractBackend {
         ))
     }
 
+    fn sensitive_field_query(
+        &self,
+        _request: &SensitiveFieldQueryRequest,
+    ) -> Result<SensitiveFieldQueryReport, InterspireError> {
+        Ok(SensitiveFieldQueryReport::fixture())
+    }
+
     fn warmup_audience_readiness(
         &self,
         _request: &WarmupAudienceReadinessRequest,
@@ -294,6 +302,9 @@ fn status_contract_is_redacted_and_read_only() {
     assert!(report
         .capabilities
         .contains(&"interspire_queue_control_apply".to_string()));
+    assert!(report
+        .capabilities
+        .contains(&"interspire_sensitive_field_query".to_string()));
     assert!(!report.guarded_writes_enabled);
     assert!(!report.queue_controls_enabled);
 }
@@ -469,7 +480,7 @@ fn queue_control_apply_contract_does_not_mutate_lists_or_authorize_send() {
     let report = ContractBackend
         .queue_control_apply(&QueueControlApplyRequest {
             plan_id: "iqc_000000000000000000000000".to_string(),
-            action: interspire_6_mcp::QueueControlAction::Cancel,
+            action: interspire_mcp::QueueControlAction::Cancel,
         })
         .unwrap_or_else(|err| panic!("{err}"));
 
@@ -483,7 +494,7 @@ fn queue_control_apply_contract_does_not_mutate_lists_or_authorize_send() {
 fn server_can_be_constructed_with_fixture_backend() {
     let server = InterspireMcpServer::with_backend(Arc::new(ContractBackend))
         .unwrap_or_else(|err| panic!("{err}"));
-    assert_eq!(server.tool_schema_snapshot().len(), 23);
+    assert_eq!(server.tool_schema_snapshot().len(), 24);
 }
 
 #[test]

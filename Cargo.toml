@@ -1,10 +1,10 @@
 [package]
-name = "interspire-6-mcp"
+name = "interspire-mcp"
 version = "0.1.0"
 edition = "2021"
-description = "Safe, curated MCP tools for Interspire Email Marketer 6.2.3 operations"
+description = "Safe, curated MCP tools for Interspire Email Marketer operations"
 license = "Apache-2.0"
-repository = "https://github.com/sednalabs/interspire-6-mcp"
+repository = "https://github.com/sednalabs/interspire-mcp"
 readme = "README.md"
 publish = false
 
@@ -12,10 +12,12 @@ publish = false
 csv = "1.4.0"
 hex = "0.4.3"
 libc = "0.2.186"
-mcp-toolkit = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "76aa657e229d51462d98297bc658b66df1b8a191", features = ["server-stdio"] }
-mcp-toolkit-core = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "76aa657e229d51462d98297bc658b66df1b8a191" }
+mcp-toolkit = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "358f5da30f898451fe8b9a3acf0ae2237a88a1dd", features = ["server-stdio"] }
+mcp-toolkit-core = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "358f5da30f898451fe8b9a3acf0ae2237a88a1dd" }
+mcp-toolkit-observability = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "358f5da30f898451fe8b9a3acf0ae2237a88a1dd" }
+mcp-toolkit-policy-core = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "358f5da30f898451fe8b9a3acf0ae2237a88a1dd" }
 reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "cookies", "rustls-tls"] }
-rmcp = { version = "=1.7.0", default-features = false, features = ["macros", "schemars", "server", "transport-io"] }
+rmcp = { version = "=1.8.0", default-features = false, features = ["macros", "schemars", "server", "transport-io"] }
 roxmltree = "0.21.1"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 schemars = "1.2.1"
@@ -28,4 +30,4 @@ tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
 url = "2.5.7"
 
 [dev-dependencies]
-mcp-toolkit-testing = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "76aa657e229d51462d98297bc658b66df1b8a191" }
+mcp-toolkit-testing = { version = "0.1.0", git = "https://github.com/sednalabs/mcp-toolkit-rs", rev = "358f5da30f898451fe8b9a3acf0ae2237a88a1dd" }

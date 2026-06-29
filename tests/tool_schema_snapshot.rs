@@ -1,4 +1,4 @@
-use interspire_6_mcp::{
+use interspire_mcp::{
     AudienceHygieneExportBeginRequest, AudienceHygieneExportReport, AudienceHygieneExportRequest,
     AudienceHygieneExportResumeRequest, AudienceHygieneExportStatusRequest, CampaignReadbackReport,
     CampaignReadbackRequest, CampaignUpdateApplyRequest, CampaignUpdatePreviewRequest,
@@ -7,10 +7,11 @@ use interspire_6_mcp::{
     ListOwnerReadbackRequest, ListSummaryReport, ListSummaryRequest, ListUpdateApplyRequest,
     ListUpdatePreviewRequest, QueueControlApplyReport, QueueControlApplyRequest,
     QueueControlPreviewReport, QueueControlPreviewRequest, QueueStatsReadbackReport,
-    QueueStatsReadbackRequest, SettingsAuditReport, SettingsAuditRequest,
-    SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport, StatusRequest,
-    UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
-    UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
+    QueueStatsReadbackRequest, SensitiveFieldQueryReport, SensitiveFieldQueryRequest,
+    SettingsAuditReport, SettingsAuditRequest, SettingsUpdateApplyRequest,
+    SettingsUpdatePreviewRequest, StatusReport, StatusRequest, UserSmtpReadbackReport,
+    UserSmtpReadbackRequest, UserUpdateApplyRequest, UserUpdatePreviewRequest,
+    WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
 };
 use mcp_toolkit_testing::assert_tool_schema_snapshot;
 use std::{path::PathBuf, sync::Arc};
@@ -172,6 +173,13 @@ impl InterspireReadBackend for FixtureBackend {
             None,
             Some(request.section.as_str()),
         ))
+    }
+
+    fn sensitive_field_query(
+        &self,
+        _request: &SensitiveFieldQueryRequest,
+    ) -> Result<SensitiveFieldQueryReport, InterspireError> {
+        Ok(SensitiveFieldQueryReport::fixture())
     }
 
     fn warmup_audience_readiness(

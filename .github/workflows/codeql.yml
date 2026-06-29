@@ -103,7 +103,7 @@ jobs:
           fi
 
           {
-            echo "name: interspire-6-mcp-codeql-actions-runtime"
+            echo "name: interspire-mcp-codeql-actions-runtime"
             echo
             echo "queries:"
             echo "  - uses: security-and-quality"
