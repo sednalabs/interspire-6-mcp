@@ -135,6 +135,24 @@ pub fn ensure_allowed_send_wizard_step2_post(
     Ok(url)
 }
 
+pub fn ensure_allowed_campaign_body_step2_post(
+    base_url: &str,
+    relative_path: &str,
+    campaign_id: u64,
+) -> Result<Url, InterspireError> {
+    let base = Url::parse(base_url)
+        .map_err(|err| InterspireError::Safety(format!("invalid admin base url: {err}")))?;
+    let base = normalize_admin_base(base);
+    let url = base.join(relative_path).map_err(|err| {
+        InterspireError::Safety(format!("invalid campaign body proof post path: {err}"))
+    })?;
+
+    ensure_admin_base_scope(&base, &url)?;
+    ensure_admin_front_controller_path(&base, &url)?;
+    classify_allowed_campaign_body_step2_post(&url, campaign_id)?;
+    Ok(url)
+}
+
 pub fn ensure_allowed_admin_post_for(
     base_url: &str,
     relative_path: &str,
@@ -278,6 +296,81 @@ pub fn classify_allowed_send_wizard_step2_post(url: &Url) -> Result<(), Interspi
         return Err(InterspireError::Safety(format!(
             "send wizard proof post action is not the no-send Step2 allowlist: {action:?}"
         )));
+    }
+
+    Ok(())
+}
+
+pub fn classify_allowed_campaign_body_step2_post(
+    url: &Url,
+    campaign_id: u64,
+) -> Result<(), InterspireError> {
+    if url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .is_none_or(|segment| segment != "index.php")
+    {
+        return Err(InterspireError::Safety(
+            "campaign body proof post path is not index.php".to_string(),
+        ));
+    }
+
+    let pairs = url.query_pairs().collect::<Vec<_>>();
+    ensure_no_duplicate_query_keys(&pairs)?;
+    ensure_only_query_keys(
+        &pairs,
+        &[
+            "Page",
+            "Action",
+            "SubAction",
+            "id",
+            "token",
+            "csrf",
+            "csrfToken",
+            "csrf_token",
+            "_token",
+        ],
+    )?;
+
+    let page = pairs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("Page"))
+        .map(|(_, value)| value.to_string());
+    let action = pairs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("Action"))
+        .map(|(_, value)| value.to_string());
+    let sub_action = pairs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("SubAction"))
+        .map(|(_, value)| value.to_string());
+    let id = pairs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("id"))
+        .and_then(|(_, value)| value.parse::<u64>().ok());
+
+    if !matches!(page.as_deref(), Some("Newsletters")) {
+        return Err(InterspireError::Safety(
+            "campaign body proof post must target the Newsletters page".to_string(),
+        ));
+    }
+    if !matches!(action.as_deref(), Some("Edit")) {
+        return Err(InterspireError::Safety(format!(
+            "campaign body proof post action is not the edit allowlist: {action:?}"
+        )));
+    }
+    if !sub_action
+        .as_deref()
+        .is_some_and(|value| value.eq_ignore_ascii_case("Step2"))
+    {
+        return Err(InterspireError::Safety(format!(
+            "campaign body proof post subaction is not the no-save Step2 allowlist: {sub_action:?}"
+        )));
+    }
+    if id != Some(campaign_id) {
+        return Err(InterspireError::Safety(
+            "campaign body proof post id does not match the requested campaign".to_string(),
+        ));
     }
 
     Ok(())
@@ -871,6 +964,32 @@ mod tests {
         ] {
             assert!(
                 ensure_allowed_send_wizard_step2_post(base_url, path).is_err(),
+                "{path} should be blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_only_campaign_body_step2_no_save_proof_post() {
+        let base_url = "https://example.test/admin/";
+        let step2 = ensure_allowed_campaign_body_step2_post(
+            base_url,
+            "index.php?Page=Newsletters&Action=Edit&SubAction=Step2&id=9&csrfToken=abc",
+            9,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert!(step2.as_str().contains("SubAction=Step2"));
+
+        for path in [
+            "index.php?Page=Newsletters&Action=Edit&SubAction=Complete&id=9",
+            "index.php?Page=Newsletters&Action=Save&id=9",
+            "index.php?Page=Newsletters&Action=Edit&SubAction=Step2&id=10",
+            "index.php?Page=Newsletters&Action=Send&id=9",
+            "index.php?Page=Newsletters&Action=Edit&SubAction=Step2&id=9&Action=Send",
+            "cron/index.php?Page=Newsletters&Action=Edit&SubAction=Step2&id=9",
+        ] {
+            assert!(
+                ensure_allowed_campaign_body_step2_post(base_url, path, 9).is_err(),
                 "{path} should be blocked"
             );
         }

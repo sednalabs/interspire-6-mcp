@@ -15,6 +15,38 @@ use crate::{
 };
 
 impl LiveInterspireBackend {
+    fn html_list_summary_fallback(
+        &self,
+        max_lists: usize,
+    ) -> Result<Option<ListSummaryReport>, InterspireError> {
+        let html = self.html_client()?;
+        if !html.configured() {
+            return Ok(None);
+        }
+        Ok(Some(html.list_summary_readback(max_lists)?))
+    }
+
+    fn html_list_owner_fallback(
+        &self,
+        max_lists: usize,
+    ) -> Result<Option<ListOwnerReadbackReport>, InterspireError> {
+        let Some(summary) = self.html_list_summary_fallback(max_lists)? else {
+            return Ok(None);
+        };
+        let mut warnings = summary.warnings;
+        warnings.insert(
+            0,
+            "admin HTML list owner readback fallback used without XML list counts".to_string(),
+        );
+        Ok(Some(ListOwnerReadbackReport {
+            ok: summary.ok,
+            configured: summary.configured,
+            lists: summary.lists,
+            warnings,
+            evidence: summary.evidence,
+        }))
+    }
+
     pub(super) fn status_impl(
         &self,
         request: &StatusRequest,
@@ -115,21 +147,56 @@ impl LiveInterspireBackend {
         &self,
         request: &ListSummaryRequest,
     ) -> Result<ListSummaryReport, InterspireError> {
+        let max_lists = cap_usize(request.max_lists, HARD_LIST_READ_LIMIT);
+        let mut warnings = Vec::new();
+        let mut notes = vec!["user/GetLists XML API read".to_string()];
         let xml = self.xml_client()?;
         if !xml.configured() {
+            if let Some(mut report) = self.html_list_summary_fallback(max_lists)? {
+                report.warnings.insert(
+                    0,
+                    "XML API is not configured; admin HTML list readback fallback used".to_string(),
+                );
+                return Ok(report);
+            }
             return Ok(ListSummaryReport {
                 ok: true,
                 configured: false,
                 lists: Vec::new(),
-                warnings: vec!["XML API is not configured; no live list read attempted".to_string()],
+                warnings: vec![
+                    "XML API is not configured and admin HTML fallback is not configured; no live list read attempted".to_string(),
+                ],
                 evidence: xml_api::xml_evidence(vec!["no request sent".to_string()]),
             });
         }
 
-        let mut lists = xml.get_lists()?;
-        let mut warnings = Vec::new();
-        let mut notes = vec!["user/GetLists XML API read".to_string()];
-        let max_lists = cap_usize(request.max_lists, HARD_LIST_READ_LIMIT);
+        let mut lists = match xml.get_lists() {
+            Ok(lists) => lists,
+            Err(err) => {
+                if let Some(mut report) = self.html_list_summary_fallback(max_lists)? {
+                    report.warnings.insert(
+                        0,
+                        format!(
+                            "XML list read failed; admin HTML fallback used: {}",
+                            redact::redact_sensitive_text(&err.to_string())
+                        ),
+                    );
+                    return Ok(report);
+                }
+                return Ok(ListSummaryReport {
+                    ok: true,
+                    configured: true,
+                    lists: Vec::new(),
+                    warnings: vec![format!(
+                        "XML list read failed and admin HTML fallback is not configured: {}",
+                        redact::redact_sensitive_text(&err.to_string())
+                    )],
+                    evidence: xml_api::xml_evidence(vec![
+                        "user/GetLists XML API read attempted".to_string()
+                    ]),
+                });
+            }
+        };
         apply_list_result_cap(
             &mut lists,
             max_lists,
@@ -175,7 +242,7 @@ impl LiveInterspireBackend {
         if !xml.configured() {
             return Ok(ContactStateReport {
                 ok: true,
-                configured: false,
+                configured: self.config.admin_html.is_configured(),
                 list_id: request.list_id,
                 email_redacted: redact::redact_email(&request.email),
                 email_hash: redact::email_hash(&request.email),
@@ -186,13 +253,43 @@ impl LiveInterspireBackend {
                 confidence: "unknown".to_string(),
                 verification_sources: Vec::new(),
                 warnings: vec![
-                    "XML API is not configured; no live contact read attempted".to_string()
+                    "XML API is not configured; no live contact read attempted".to_string(),
+                    "admin HTML contact corroboration is not yet exposed as a route-safe MCP read; do not use this as send-readiness proof".to_string(),
                 ],
                 evidence: xml_api::xml_evidence(vec!["no request sent".to_string()]),
             });
         }
 
-        let found = xml.is_subscriber_on_list(&request.email, request.list_id)?;
+        let found = match xml.is_subscriber_on_list(&request.email, request.list_id) {
+            Ok(found) => found,
+            Err(err) => {
+                return Ok(ContactStateReport {
+                    ok: true,
+                    configured: true,
+                    list_id: request.list_id,
+                    email_redacted: redact::redact_email(&request.email),
+                    email_hash: redact::email_hash(&request.email),
+                    found_on_list: None,
+                    xml_found_on_list: None,
+                    state: "unknown_xml_error".to_string(),
+                    source_authority: "interspire_xml_api_presence_probe".to_string(),
+                    confidence: "unknown".to_string(),
+                    verification_sources: vec!["interspire_xml_api_attempted".to_string()],
+                    warnings: vec![
+                        format!(
+                            "XML contact-state read failed: {}",
+                            redact::redact_sensitive_text(&err.to_string())
+                        ),
+                        "admin HTML contact corroboration is not yet exposed as a route-safe MCP read; do not use this as send-readiness proof".to_string(),
+                    ],
+                    evidence: xml_api::xml_evidence(vec![
+                        "subscribers/IsSubscriberOnList XML API read attempted".to_string(),
+                        "failure returned as unknown state rather than authoritative absence"
+                            .to_string(),
+                    ]),
+                });
+            }
+        };
         let outcome = contact_state_outcome(found);
         Ok(ContactStateReport {
             ok: true,
@@ -227,7 +324,14 @@ impl LiveInterspireBackend {
         request: &ListOwnerReadbackRequest,
     ) -> Result<ListOwnerReadbackReport, InterspireError> {
         let xml = self.xml_client()?;
+        let max_lists = cap_usize(
+            request.max_lists.unwrap_or(DEFAULT_LIST_READ_LIMIT),
+            HARD_LIST_READ_LIMIT,
+        );
         if !xml.configured() {
+            if let Some(report) = self.html_list_owner_fallback(max_lists)? {
+                return Ok(report);
+            }
             return Ok(ListOwnerReadbackReport {
                 ok: true,
                 configured: false,
@@ -239,11 +343,33 @@ impl LiveInterspireBackend {
             });
         }
 
-        let mut lists = xml.get_lists()?;
-        let max_lists = cap_usize(
-            request.max_lists.unwrap_or(DEFAULT_LIST_READ_LIMIT),
-            HARD_LIST_READ_LIMIT,
-        );
+        let mut lists = match xml.get_lists() {
+            Ok(lists) => lists,
+            Err(err) => {
+                if let Some(mut report) = self.html_list_owner_fallback(max_lists)? {
+                    report.warnings.insert(
+                        0,
+                        format!(
+                            "XML list owner read failed; admin HTML fallback used: {}",
+                            redact::redact_sensitive_text(&err.to_string())
+                        ),
+                    );
+                    return Ok(report);
+                }
+                return Ok(ListOwnerReadbackReport {
+                    ok: true,
+                    configured: true,
+                    lists: Vec::new(),
+                    warnings: vec![format!(
+                        "XML list owner read failed and admin HTML fallback is not configured: {}",
+                        redact::redact_sensitive_text(&err.to_string())
+                    )],
+                    evidence: xml_api::xml_evidence(vec![
+                        "user/GetLists XML API read attempted".to_string()
+                    ]),
+                });
+            }
+        };
 
         let mut warnings = Vec::new();
         let mut notes = vec!["user/GetLists XML API read".to_string()];

@@ -1,6 +1,6 @@
 use super::{
-    admin_evidence, compact_text, ensure_authenticated_html, parse_table_rows, redact_field_value,
-    route_fingerprint, AdminHtmlClient,
+    admin_evidence, compact_text, ensure_authenticated_html, extract_login_csrf_token, forms,
+    parse_table_rows, redact_field_value, route_fingerprint, AdminHtmlClient,
 };
 use crate::{
     error::InterspireError,
@@ -12,8 +12,10 @@ use crate::{
     },
     safety::{self, AdminReadPage},
 };
-use scraper::{Html, Selector};
+use reqwest::blocking::RequestBuilder;
+use scraper::{ElementRef, Html, Selector};
 use sha2::{Digest, Sha256};
+use url::Url;
 
 impl AdminHtmlClient {
     pub fn admin_session_probe(
@@ -79,8 +81,53 @@ impl AdminHtmlClient {
         }
         self.login()?;
 
-        let html = self.get_allowed(&AdminReadPage::NewsletterEdit { id: campaign_id }.path())?;
-        campaign_body_audit_from_html(campaign_id, &html)
+        let step1_path = AdminReadPage::NewsletterEdit { id: campaign_id }.path();
+        let step1_html = self.get_allowed(&step1_path)?;
+        let mut report = campaign_body_audit_from_html(campaign_id, &step1_html)?;
+        if report.html_bytes > 0 || report.text_bytes > 0 {
+            return Ok(report);
+        }
+
+        let Some(step2_path) = campaign_body_step2_action_path(campaign_id, &step1_html)? else {
+            report.warnings.push(
+                "campaign edit page did not expose Interspire 8 Step2 body form; body audit is incomplete"
+                    .to_string(),
+            );
+            return Ok(report);
+        };
+        let step2_url = safety::ensure_allowed_campaign_body_step2_post(
+            self.config.base_url.as_deref().unwrap_or_default(),
+            &step2_path,
+            campaign_id,
+        )?;
+        let mut post_pairs = campaign_body_step1_pairs(campaign_id, &step1_html)?;
+        append_csrf_pair_if_missing(&mut post_pairs, &step1_html);
+        let response = self
+            .proof_post_with_page_context(step2_url, &post_pairs, &step1_path)?
+            .send()
+            .map_err(|err| InterspireError::Http(err.to_string()))?;
+        if !response.status().is_success() {
+            return Err(InterspireError::Http(format!(
+                "campaign body no-save Step2 render returned HTTP {}",
+                response.status().as_u16()
+            )));
+        }
+        let step2_html = response
+            .text()
+            .map_err(|err| InterspireError::Http(err.to_string()))?;
+        ensure_authenticated_html(&step2_html)?;
+
+        report = campaign_body_audit_from_html(campaign_id, &step2_html)?;
+        let step1_fields = parse_form_values_exact(&step1_html)?;
+        if report.name.is_none() {
+            report.name = first_present(&step1_fields, &["name"])
+                .map(|value| redact::redact_sensitive_text(&value));
+        }
+        report.evidence.notes.push(
+            "allowlisted Newsletter edit Step1 POST rendered Interspire 8 Step2 body page; Complete/save form was not posted"
+                .to_string(),
+        );
+        Ok(report)
     }
 
     pub fn send_wizard_readback(
@@ -126,9 +173,10 @@ impl AdminHtmlClient {
             post_pairs.push(("lists[]".to_string(), list_id.to_string()));
         }
 
+        append_csrf_pair_if_missing(&mut post_pairs, &start_html);
+
         let response = self
-            .with_access_headers(self.http.post(step2_url))
-            .form(&post_pairs)
+            .proof_post_with_page_context(step2_url, &post_pairs, &AdminReadPage::SendStart.path())?
             .send()
             .map_err(|err| InterspireError::Http(err.to_string()))?;
         if !response.status().is_success() {
@@ -329,6 +377,30 @@ impl AdminHtmlClient {
             ]),
         })
     }
+
+    fn proof_post_with_page_context(
+        &self,
+        url: Url,
+        post_pairs: &[(String, String)],
+        referer_path: &str,
+    ) -> Result<RequestBuilder, InterspireError> {
+        let mut request = self
+            .with_access_headers(self.http.post(url))
+            .form(post_pairs)
+            .header("referer", self.admin_url_for_path(referer_path)?.as_str())
+            .header(
+                "origin",
+                admin_origin(self.config.base_url.as_deref().unwrap_or_default())?,
+            );
+        if let Some((_, token)) = csrf_pair(post_pairs) {
+            request = request.header("x-csrf-token", token.as_str());
+        }
+        Ok(request)
+    }
+
+    fn admin_url_for_path(&self, path: &str) -> Result<Url, InterspireError> {
+        safety::ensure_allowed_admin_get(self.config.base_url.as_deref().unwrap_or_default(), path)
+    }
 }
 
 fn gate(name: &str, passed: bool, severity: &str, detail: String) -> SeedReadinessGate {
@@ -345,8 +417,30 @@ fn campaign_body_audit_from_html(
     html: &str,
 ) -> Result<CampaignBodyAuditReport, InterspireError> {
     let fields = parse_form_values_exact(html)?;
-    let html_body = first_present(&fields, &["htmlbody", "htmlcontents"]).unwrap_or_default();
-    let text_body = first_present(&fields, &["textbody", "textcontents"]).unwrap_or_default();
+    let html_body = first_present(
+        &fields,
+        &[
+            "htmlbody",
+            "htmlcontents",
+            "mydeveditcontrol_html",
+            "mydeveditcontrolhtml",
+            "html_content",
+            "htmlcontent",
+        ],
+    )
+    .unwrap_or_default();
+    let text_body = first_present(
+        &fields,
+        &[
+            "textbody",
+            "textcontents",
+            "mydeveditcontrol_text",
+            "mydeveditcontroltext",
+            "text_content",
+            "textcontent",
+        ],
+    )
+    .unwrap_or_default();
     let name = first_present(&fields, &["name"]).map(|value| redact::redact_sensitive_text(&value));
     let subject =
         first_present(&fields, &["subject"]).map(|value| redact::redact_sensitive_text(&value));
@@ -397,6 +491,101 @@ fn campaign_body_audit_from_html(
     })
 }
 
+fn campaign_body_step2_action_path(
+    campaign_id: u64,
+    html: &str,
+) -> Result<Option<String>, InterspireError> {
+    let document = Html::parse_document(html);
+    let form_selector =
+        Selector::parse("form").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
+    for form in document.select(&form_selector) {
+        let Some(action) = form.value().attr("action") else {
+            continue;
+        };
+        if safety::classify_allowed_campaign_body_step2_post(
+            &form_action_url_for_parse(action)?,
+            campaign_id,
+        )
+        .is_ok()
+        {
+            return Ok(Some(action.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+fn campaign_body_step1_pairs(
+    campaign_id: u64,
+    html: &str,
+) -> Result<Vec<(String, String)>, InterspireError> {
+    let document = Html::parse_document(html);
+    let form_selector =
+        Selector::parse("form").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
+    for form in document.select(&form_selector) {
+        let Some(action) = form.value().attr("action") else {
+            continue;
+        };
+        if safety::classify_allowed_campaign_body_step2_post(
+            &form_action_url_for_parse(action)?,
+            campaign_id,
+        )
+        .is_err()
+        {
+            continue;
+        }
+        let pairs = controls_to_proof_post_pairs(&form);
+        if pairs
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("name"))
+            && pairs
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("format"))
+        {
+            return Ok(pairs);
+        }
+        return Err(InterspireError::HtmlParse(
+            "campaign Step1 proof form did not include required Name and Format controls"
+                .to_string(),
+        ));
+    }
+    Err(InterspireError::HtmlParse(
+        "campaign Step1 proof form was not found".to_string(),
+    ))
+}
+
+fn controls_to_proof_post_pairs(form: &ElementRef<'_>) -> Vec<(String, String)> {
+    forms::parse_form_controls(form)
+        .into_iter()
+        .filter_map(|control| match control.kind {
+            forms::FormControlKind::Hidden => {
+                Some((control.original_name.clone(), control.value.clone()))
+            }
+            forms::FormControlKind::Text
+            | forms::FormControlKind::Textarea
+            | forms::FormControlKind::Select => {
+                Some((control.original_name.clone(), control.value.clone()))
+            }
+            forms::FormControlKind::Checkbox | forms::FormControlKind::Radio => control
+                .checked
+                .then(|| (control.original_name.clone(), control.value.clone())),
+            forms::FormControlKind::Submit => {
+                let lower_value = control.value.to_ascii_lowercase();
+                let lower_name = control.lower_name.to_ascii_lowercase();
+                (lower_name.contains("next") || lower_value.contains("next"))
+                    .then(|| (control.original_name.clone(), control.value.clone()))
+            }
+            forms::FormControlKind::Password => None,
+        })
+        .collect()
+}
+
+fn form_action_url_for_parse(action: &str) -> Result<Url, InterspireError> {
+    Url::parse("https://example.test/admin/")
+        .unwrap_or_else(|err| panic!("static URL should parse: {err}"))
+        .join(action)
+        .map_err(|err| InterspireError::HtmlParse(format!("invalid form action: {err}")))
+}
+
 fn send_step2_action_path(html: &str) -> Option<String> {
     let document = Html::parse_document(html);
     let form_selector = Selector::parse("form").ok()?;
@@ -433,6 +622,44 @@ fn send_start_hidden_pairs(html: &str) -> Result<Vec<(String, String)>, Interspi
         })
         .collect();
     Ok(pairs)
+}
+
+fn append_csrf_pair_if_missing(pairs: &mut Vec<(String, String)>, html: &str) {
+    if csrf_pair(pairs).is_some() {
+        return;
+    }
+    if let Some(token) = extract_login_csrf_token(html) {
+        pairs.push((token.field_name, token.value));
+    }
+}
+
+fn csrf_pair(pairs: &[(String, String)]) -> Option<(String, String)> {
+    pairs
+        .iter()
+        .find(|(name, value)| is_csrf_field_name(name) && !value.trim().is_empty())
+        .map(|(name, value)| (name.clone(), value.clone()))
+}
+
+fn is_csrf_field_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "csrf" | "csrftoken" | "csrf_token" | "token" | "_token" | "form_token" | "iem_csrf_token"
+    ) || lower.ends_with("token")
+}
+
+fn admin_origin(base_url: &str) -> Result<String, InterspireError> {
+    let url = Url::parse(base_url)
+        .map_err(|err| InterspireError::Safety(format!("invalid admin base url: {err}")))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| InterspireError::Safety("admin base url has no host".to_string()))?;
+    let mut origin = format!("{}://{}", url.scheme(), host);
+    if let Some(port) = url.port() {
+        origin.push(':');
+        origin.push_str(&port.to_string());
+    }
+    Ok(origin)
 }
 
 fn upsert_post_pair(pairs: &mut Vec<(String, String)>, name: &str, value: &str) {
@@ -772,8 +999,9 @@ fn sha256_hex(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        campaign_body_audit_from_html, parse_send_wizard_final_page, recipient_count_marker,
-        selected_or_hidden_list_ids, send_step2_action_path,
+        append_csrf_pair_if_missing, campaign_body_audit_from_html, campaign_body_step1_pairs,
+        campaign_body_step2_action_path, csrf_pair, parse_send_wizard_final_page,
+        recipient_count_marker, selected_or_hidden_list_ids, send_step2_action_path,
     };
 
     #[test]
@@ -798,6 +1026,73 @@ mod tests {
         assert!(report.html_sha256.is_some());
         assert!(!serialized.contains("%%UNSUBSCRIBELINK%%"));
         assert!(!serialized.contains("<html>"));
+    }
+
+    #[test]
+    fn campaign_body_audit_understands_interspire_8_editor_fields() {
+        let html = r#"
+            <form action="index.php?Page=Newsletters&Action=Edit&SubAction=Complete&id=7">
+              <input name="subject" value="Subject">
+              <textarea name="myDevEditControl_html"><div><a href="https://example.invalid">Read</a><img src="x.png" alt="Logo">%%UNSUBSCRIBELINK%%</div></textarea>
+              <textarea name="myDevEditControl_text">Plain text</textarea>
+            </form>
+        "#;
+
+        let report = campaign_body_audit_from_html(7, html).expect("campaign body audit");
+        let serialized = serde_json::to_string(&report).expect("serialize report");
+
+        assert_eq!(report.unsubscribe_token_count, 1);
+        assert!(report.html_bytes > 0);
+        assert_eq!(report.http_url_count, 0);
+        assert_eq!(report.https_url_count, 1);
+        assert_eq!(report.image_count, 1);
+        assert_eq!(report.missing_alt_image_count, 0);
+        assert!(!serialized.contains("myDevEditControl_html"));
+        assert!(!serialized.contains("%%UNSUBSCRIBELINK%%"));
+    }
+
+    #[test]
+    fn campaign_body_step1_post_preserves_required_fields_without_final_save() {
+        let html = r#"
+            <form action="index.php?Page=Newsletters&Action=Edit&SubAction=Step2&id=7">
+              <input type="hidden" name="csrfToken" value="abc123">
+              <input name="Name" value="Launch">
+              <input type="radio" name="Format" value="t">
+              <input type="radio" name="Format" value="h" checked>
+              <input type="hidden" name="usewysiwyg" value="3">
+              <input type="submit" name="NextButton" value="Next &gt;&gt;">
+            </form>
+        "#;
+
+        assert_eq!(
+            campaign_body_step2_action_path(7, html)
+                .expect("parse action")
+                .as_deref(),
+            Some("index.php?Page=Newsletters&Action=Edit&SubAction=Step2&id=7")
+        );
+        let pairs = campaign_body_step1_pairs(7, html).expect("step1 pairs");
+
+        assert!(pairs.contains(&("Name".to_string(), "Launch".to_string())));
+        assert!(pairs.contains(&("Format".to_string(), "h".to_string())));
+        assert!(!pairs.contains(&("Format".to_string(), "t".to_string())));
+        assert!(pairs.contains(&("usewysiwyg".to_string(), "3".to_string())));
+        assert!(pairs.contains(&("csrfToken".to_string(), "abc123".to_string())));
+    }
+
+    #[test]
+    fn csrf_header_token_ignores_non_token_hidden_replay_fields() {
+        let mut pairs = vec![("ShowFilteringOptions".to_string(), "2".to_string())];
+        assert!(csrf_pair(&pairs).is_none());
+
+        append_csrf_pair_if_missing(
+            &mut pairs,
+            r#"<script>window.IEM_CSRF_TOKEN = "token-123";</script>"#,
+        );
+
+        assert_eq!(
+            csrf_pair(&pairs),
+            Some(("csrfToken".to_string(), "token-123".to_string()))
+        );
     }
 
     #[test]

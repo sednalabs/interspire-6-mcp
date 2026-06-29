@@ -157,7 +157,10 @@ guarded writes:
   through allowlisted read pages.
 - `interspire_campaign_body_audit` counts redacted campaign-body signals such
   as unsubscribe tokens, link protocol mix, image-alt coverage, and visible
-  tracking-pixel text without returning raw HTML.
+  tracking-pixel text without returning raw HTML. On Interspire 8.x it may
+  render the editor Step2 body form through an allowlisted no-save Step1 POST
+  when the initial edit page only contains campaign metadata; it never posts
+  the final Complete/save form.
 - `interspire_send_wizard_readback` posts only to the allowlisted Send Step2
   proof route, parses the resulting final editable wizard page, and never posts
   that final form.

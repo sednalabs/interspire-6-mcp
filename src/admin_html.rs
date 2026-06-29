@@ -14,10 +14,11 @@ use crate::{
     guarded_write, redact,
     response::{
         CampaignReadbackReport, Evidence, FormFieldUpdate, GuardedWriteApplyReport,
-        GuardedWritePreviewReport, ListSummary, QueueControlAction, QueueControlCandidate,
-        QueueStatsReadbackReport, RedactedField, SensitiveFieldDenial, SensitiveFieldQueryReport,
-        SensitiveFieldQueryRequest, SensitiveFieldTarget, SensitiveFieldValue, SettingsAuditReport,
-        SettingsSection, SettingsSectionName, UserSmtpReadbackReport, UserSmtpSummary,
+        GuardedWritePreviewReport, ListSummary, ListSummaryReport, QueueControlAction,
+        QueueControlCandidate, QueueStatsReadbackReport, RedactedField, SensitiveFieldDenial,
+        SensitiveFieldQueryReport, SensitiveFieldQueryRequest, SensitiveFieldTarget,
+        SensitiveFieldValue, SettingsAuditReport, SettingsSection, SettingsSectionName,
+        UserSmtpReadbackReport, UserSmtpSummary,
     },
     safety::{self, AdminReadPage, QueueControlRoute},
 };
@@ -41,6 +42,7 @@ pub struct AdminHtmlClient {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ListEditMetadata {
     pub list_id: u64,
+    pub name: Option<String>,
     pub owner_name: Option<String>,
     pub owner_email_redacted: Option<String>,
     pub reply_to_email_redacted: Option<String>,
@@ -84,9 +86,9 @@ struct QueueDeleteForm {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LoginCsrfToken {
-    field_name: String,
-    value: String,
+pub(super) struct LoginCsrfToken {
+    pub(super) field_name: String,
+    pub(super) value: String,
 }
 
 #[derive(Debug, Clone)]
@@ -163,6 +165,67 @@ impl AdminHtmlClient {
             ));
         }
         Ok(notes)
+    }
+
+    pub fn list_summary_readback(
+        &self,
+        max_lists: usize,
+    ) -> Result<ListSummaryReport, InterspireError> {
+        if !self.config.is_configured() {
+            return Err(InterspireError::AdminHtmlNotConfigured);
+        }
+        self.login()?;
+
+        let lists_html = self.get_allowed(&AdminReadPage::Lists.path())?;
+        let list_ids = extract_ids_from_links(&lists_html, "Page=Lists", "id");
+        let mut lists = Vec::new();
+        let mut warnings = Vec::new();
+        for list_id in list_ids.iter().take(max_lists) {
+            let html = self.get_allowed(&AdminReadPage::ListEdit { id: *list_id }.path())?;
+            match parse_list_edit_metadata(*list_id, &html) {
+                Ok(metadata) => lists.push(ListSummary {
+                    list_id: *list_id,
+                    name: metadata.name.unwrap_or_else(|| format!("list-{list_id}")),
+                    subscribed_count: None,
+                    unsubscribed_count: None,
+                    autoresponder_count: None,
+                    owner_name: metadata.owner_name,
+                    owner_email_redacted: metadata.owner_email_redacted,
+                    reply_to_email_redacted: metadata.reply_to_email_redacted,
+                    bounce_email_redacted: metadata.bounce_email_redacted,
+                    source: "admin_html".to_string(),
+                }),
+                Err(err) => warnings.push(format!(
+                    "list {} html parse skipped: {}",
+                    list_id,
+                    redact::redact_sensitive_text(&err.to_string())
+                )),
+            }
+        }
+        if list_ids.len() > max_lists {
+            warnings.push(format!(
+                "admin HTML list readback limited to {max_lists} of {} lists",
+                list_ids.len()
+            ));
+        }
+        if lists.is_empty() {
+            warnings.push(
+                "admin HTML list readback did not find list edit links on the Lists page"
+                    .to_string(),
+            );
+        }
+
+        Ok(ListSummaryReport {
+            ok: true,
+            configured: true,
+            lists,
+            warnings,
+            evidence: admin_evidence(vec![
+                "allowlisted Lists GET read".to_string(),
+                "allowlisted List edit GET reads for redacted metadata".to_string(),
+                "subscriber/contact rows were not exported".to_string(),
+            ]),
+        })
     }
 
     pub fn settings_audit(
@@ -842,7 +905,7 @@ fn ensure_authenticated_html(html: &str) -> Result<(), InterspireError> {
     Ok(())
 }
 
-fn extract_login_csrf_token(html: &str) -> Option<LoginCsrfToken> {
+pub(super) fn extract_login_csrf_token(html: &str) -> Option<LoginCsrfToken> {
     let document = Html::parse_document(html);
     let input_selector = Selector::parse("input").ok()?;
     for input in document.select(&input_selector) {
@@ -1116,6 +1179,8 @@ pub fn parse_list_edit_metadata(
 
     Ok(ListEditMetadata {
         list_id,
+        name: first_value(&values, &["name", "listname", "list_name"])
+            .map(|value| redact::redact_sensitive_text(&value)),
         owner_name: first_value(&values, &["ownername", "owner_name", "listownername"])
             .and_then(|value| redact_field_value("ownername", &value)),
         owner_email_redacted: first_value(&values, &["owneremail", "owner_email", "fromemail"])

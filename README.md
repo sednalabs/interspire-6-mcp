@@ -298,6 +298,12 @@ be parsed to prove selected campaign/list metadata, recipient estimates,
 tracking checkboxes, sender fields, and form fingerprints, but it is never
 submitted.
 
+For Interspire 8.x campaign drafts, `interspire_campaign_body_audit` may render
+the campaign editor's Step2 body form through an allowlisted no-save Step1 POST
+when the initial edit page only contains metadata fields. It parses the Step2
+HTML body controls such as `myDevEditControl_html`, then stops before the
+Complete/save form.
+
 `interspire_send_wizard_readback` records Schedule and Stats rows before and
 after the proof render and reports whether those invariants changed.
 `interspire_seed_readiness_gate` combines that proof with campaign-body safety
