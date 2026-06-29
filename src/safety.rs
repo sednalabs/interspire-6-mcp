@@ -1,10 +1,10 @@
 //! URL safety policy for Interspire admin HTML.
 //!
-//! Only explicitly known GET pages are admitted. Send, schedule, cron, import,
-//! export, save, delete, unsubscribe, and parameter-smuggling variants are
-//! blocked before the HTTP client can request them. The one mutating exception
-//! is a narrow Schedule-page cancel/delete route used by guarded queue-control
-//! apply tools.
+//! Only explicitly known GET pages are admitted. Unreviewed send, schedule,
+//! cron, import, export, save, delete, unsubscribe, and parameter-smuggling
+//! variants are blocked before the HTTP client can request them. Mutating
+//! exceptions are narrow guarded routes: Schedule-page cancel/delete and the
+//! explicitly enabled guarded-send final form post.
 
 use crate::{error::InterspireError, response::QueueControlAction};
 use std::collections::HashSet;
@@ -150,6 +150,23 @@ pub fn ensure_allowed_campaign_body_step2_post(
     ensure_admin_base_scope(&base, &url)?;
     ensure_admin_front_controller_path(&base, &url)?;
     classify_allowed_campaign_body_step2_post(&url, campaign_id)?;
+    Ok(url)
+}
+
+pub fn ensure_allowed_guarded_send_final_post(
+    base_url: &str,
+    relative_path: &str,
+) -> Result<Url, InterspireError> {
+    let base = Url::parse(base_url)
+        .map_err(|err| InterspireError::Safety(format!("invalid admin base url: {err}")))?;
+    let base = normalize_admin_base(base);
+    let url = base.join(relative_path).map_err(|err| {
+        InterspireError::Safety(format!("invalid guarded send final post path: {err}"))
+    })?;
+
+    ensure_admin_base_scope(&base, &url)?;
+    ensure_admin_front_controller_path(&base, &url)?;
+    classify_allowed_guarded_send_final_post(&url)?;
     Ok(url)
 }
 
@@ -371,6 +388,58 @@ pub fn classify_allowed_campaign_body_step2_post(
         return Err(InterspireError::Safety(
             "campaign body proof post id does not match the requested campaign".to_string(),
         ));
+    }
+
+    Ok(())
+}
+
+pub fn classify_allowed_guarded_send_final_post(url: &Url) -> Result<(), InterspireError> {
+    if url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .is_none_or(|segment| segment != "index.php")
+    {
+        return Err(InterspireError::Safety(
+            "guarded send final post path is not index.php".to_string(),
+        ));
+    }
+
+    let pairs = url.query_pairs().collect::<Vec<_>>();
+    ensure_no_duplicate_query_keys(&pairs)?;
+    ensure_only_query_keys(
+        &pairs,
+        &[
+            "Page",
+            "Action",
+            "token",
+            "csrf",
+            "csrfToken",
+            "csrf_token",
+            "_token",
+        ],
+    )?;
+
+    let page = pairs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("Page"))
+        .map(|(_, value)| value.to_string());
+    let action = pairs
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("Action"))
+        .map(|(_, value)| value.to_string());
+
+    if !matches!(page.as_deref(), Some("Send")) {
+        return Err(InterspireError::Safety(
+            "guarded send final post must target the Send page".to_string(),
+        ));
+    }
+    if !matches!(
+        action.as_deref(),
+        Some("Step3") | Some("Step4") | Some("Send")
+    ) {
+        return Err(InterspireError::Safety(format!(
+            "guarded send final post action is not in the final-send allowlist: {action:?}"
+        )));
     }
 
     Ok(())
@@ -964,6 +1033,35 @@ mod tests {
         ] {
             assert!(
                 ensure_allowed_send_wizard_step2_post(base_url, path).is_err(),
+                "{path} should be blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_only_guarded_send_final_form_posts() {
+        let base_url = "https://example.test/admin/";
+        for path in [
+            "index.php?Page=Send&Action=Step3&token=abc",
+            "index.php?Page=Send&Action=Step4",
+            "index.php?Page=Send&Action=Send&csrfToken=abc",
+        ] {
+            assert!(
+                ensure_allowed_guarded_send_final_post(base_url, path).is_ok(),
+                "{path} should be allowed"
+            );
+        }
+
+        for path in [
+            "index.php?Page=Send&Action=Step2&token=abc",
+            "index.php?Page=Send&Action=Schedule",
+            "index.php?Page=Send&Action=Step4&Action=Schedule",
+            "index.php?Page=Newsletters&Action=Send&id=9",
+            "index.php?Page=Schedule&Action=Send&id=1",
+            "cron/index.php?Page=Send&Action=Step4",
+        ] {
+            assert!(
+                ensure_allowed_guarded_send_final_post(base_url, path).is_err(),
                 "{path} should be blocked"
             );
         }

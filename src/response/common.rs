@@ -239,8 +239,13 @@ impl StatusReport {
                 "interspire_queue_control_apply".to_string(),
                 "interspire_campaign_readback".to_string(),
                 "interspire_campaign_body_audit".to_string(),
+                "interspire_campaign_render_artifact".to_string(),
                 "interspire_send_wizard_readback".to_string(),
                 "interspire_seed_readiness_gate".to_string(),
+                "interspire_seed_send_apply".to_string(),
+                "interspire_production_send_apply".to_string(),
+                "interspire_campaign_template_update_preview".to_string(),
+                "interspire_campaign_template_update_apply".to_string(),
                 "interspire_campaign_update_preview".to_string(),
                 "interspire_campaign_update_apply".to_string(),
                 "interspire_list_update_preview".to_string(),
@@ -420,7 +425,8 @@ impl ContactStateReport {
 
 pub fn blocked_operations() -> Vec<String> {
     [
-        "send",
+        "generic_send_without_guarded_send_tool",
+        "production_send_without_guarded_production_tool",
         "schedule",
         "cron_trigger",
         "queue_cancel_without_guarded_plan",

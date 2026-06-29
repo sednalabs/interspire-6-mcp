@@ -125,7 +125,7 @@ impl GuardedFormTarget {
     }
 }
 
-const CAMPAIGN_WRITE_FIELDS: [&str; 14] = [
+const CAMPAIGN_WRITE_FIELDS: [&str; 25] = [
     "name",
     "subject",
     "sendfromname",
@@ -137,9 +137,20 @@ const CAMPAIGN_WRITE_FIELDS: [&str; 14] = [
     "trackopens",
     "tracklinks",
     "embedimages",
+    "html_body",
     "htmlbody",
     "htmlcontents",
+    "mydeveditcontrol_html",
+    "mydeveditcontrolhtml",
+    "html_content",
+    "htmlcontent",
+    "text_body",
     "textbody",
+    "textcontents",
+    "mydeveditcontrol_text",
+    "mydeveditcontroltext",
+    "text_content",
+    "textcontent",
 ];
 
 const LIST_WRITE_FIELDS: [&str; 5] = [
@@ -634,11 +645,14 @@ fn apply_requested_updates(
             )));
         }
 
+        let target_lower_name = resolve_semantic_field_name(snapshot, &lower_name);
         let matched_indices = snapshot
             .controls
             .iter()
             .enumerate()
-            .filter_map(|(index, control)| (control.lower_name == lower_name).then_some(index))
+            .filter_map(|(index, control)| {
+                (control.lower_name == target_lower_name).then_some(index)
+            })
             .collect::<Vec<_>>();
         if matched_indices.is_empty() {
             return Err(InterspireError::HtmlParse(format!(
@@ -646,9 +660,9 @@ fn apply_requested_updates(
             )));
         }
 
-        let before_fingerprint = snapshot.field_fingerprint(&lower_name);
+        let before_fingerprint = snapshot.field_fingerprint(&target_lower_name);
         let (control_kind, current_value) = snapshot
-            .current_field_summary(&lower_name)
+            .current_field_summary(&target_lower_name)
             .unwrap_or_else(|| ("unknown".to_string(), String::new()));
         let first_control = snapshot.controls[matched_indices[0]].clone();
         let requested_value = preview_requested_value(update, &first_control);
@@ -724,13 +738,17 @@ fn apply_requested_updates(
         }
 
         let after_value = snapshot
-            .current_field_summary(&lower_name)
+            .current_field_summary(&target_lower_name)
             .map(|(_, value)| value);
-        let after_fingerprint = snapshot.field_fingerprint(&lower_name);
+        let after_fingerprint = snapshot.field_fingerprint(&target_lower_name);
         let requested_value = requested_value.or(after_value.clone());
         let will_change = before_fingerprint != after_fingerprint;
         changes.push(FormFieldChange {
-            name: lower_name,
+            name: if target_lower_name == lower_name {
+                lower_name
+            } else {
+                format!("{lower_name}->{target_lower_name}")
+            },
             control_kind,
             current_value: Some(current_value),
             requested_value,
@@ -745,6 +763,39 @@ fn apply_requested_updates(
     }
 
     Ok(changes)
+}
+
+fn resolve_semantic_field_name(snapshot: &FormSnapshot, lower_name: &str) -> String {
+    let candidates: &[&str] = match lower_name {
+        "html_body" => &[
+            "htmlbody",
+            "htmlcontents",
+            "mydeveditcontrol_html",
+            "mydeveditcontrolhtml",
+            "html_content",
+            "htmlcontent",
+        ],
+        "text_body" => &[
+            "textbody",
+            "textcontents",
+            "mydeveditcontrol_text",
+            "mydeveditcontroltext",
+            "text_content",
+            "textcontent",
+        ],
+        _ => return lower_name.to_string(),
+    };
+    candidates
+        .iter()
+        .find(|candidate| {
+            snapshot
+                .controls
+                .iter()
+                .any(|control| control.lower_name == **candidate)
+        })
+        .copied()
+        .unwrap_or(lower_name)
+        .to_string()
 }
 
 fn preview_requested_value(update: &FormFieldUpdate, control: &FormControl) -> Option<String> {

@@ -1,7 +1,8 @@
 # Safety Model
 
 This repository is built around one rule: a tool should answer an operational
-question without creating a new way to send mail or corrupt list state.
+question without creating an uncontrolled way to send mail or corrupt list
+state.
 
 ## Defaults
 
@@ -21,7 +22,7 @@ question without creating a new way to send mail or corrupt list state.
 
 The MCP server intentionally does not provide tools for:
 
-- sending;
+- generic or unreviewed sending;
 - scheduling;
 - cron triggering;
 - imports;
@@ -34,9 +35,10 @@ The MCP server intentionally does not provide tools for:
 - provider API mutation;
 - DNS mutation.
 
-Allowlisted writes are limited to queue cancel/delete plus guarded no-send
-campaign, list, user, and non-secret settings edits. Anything outside those
-targets stays blocked.
+Allowlisted writes are limited to queue cancel/delete, guarded campaign, list,
+user, and non-secret settings edits, semantic template edits, private artifact
+creation, and explicit guarded send apply tools. Anything outside those targets
+stays blocked.
 
 ## Negative Tool Surface
 
@@ -61,7 +63,8 @@ paths:
 - users and user edit pages;
 - newsletter manage and edit pages;
 - schedule and stats pages.
-- the Send page only for the reviewed no-send Step2 proof boundary.
+- the Send page for the reviewed no-send Step2 proof boundary and the
+  separately gated guarded-send final form boundary.
 
 Extra query parameters, duplicate query keys, path escapes, cross-origin URLs,
 and send/import/export/contact mutation paths are blocked before HTTP requests
@@ -73,11 +76,12 @@ returning raw pages to the MCP client. Hidden fields, selected options, and
 checked state are captured only for guarded preview/apply form workflows, then
 re-read after apply to prove what persisted.
 
-The Send page allowlist is narrower than the ordinary read-page allowlist. It
-exists only so `interspire_send_wizard_readback` can render the Step2/final
-editable wizard state and then stop before the final send boundary. Step3,
-Step4, send, schedule, import, export, cron, and contact/suppression paths stay
-blocked.
+The Send page allowlist is narrower than the ordinary read-page allowlist.
+No-mutation tools use it only so `interspire_send_wizard_readback` can render
+the Step2/final editable wizard state and then stop before the final send
+boundary. Guarded send apply tools have a separate final-form POST classifier
+for Send Step3/Step4/Send actions captured from the freshly proven page.
+Schedule, import, export, cron, and contact/suppression paths stay blocked.
 
 ## Preview/Apply As Transaction Guard
 
@@ -170,15 +174,38 @@ guarded writes:
   evidence while still treating the next form as a blocked send boundary.
 - `interspire_seed_readiness_gate` combines campaign-body and wizard evidence
   into review gates without approving a seed or production send.
+- `interspire_seed_send_apply` repeats those gates immediately before posting
+  the final send form and is bounded to an acknowledged seed-recipient count
+  of 1-20.
+- `interspire_production_send_apply` repeats those gates immediately before
+  posting the final send form and additionally requires production send runtime
+  enablement plus exact expected recipient count, From, Reply-To, subject, HTML
+  SHA-256, and the required confirmation phrase.
 
 The wizard proof records Schedule and Stats rows before and after the Step2
 render. Output includes invariant evidence and explicit negative flags such as
 `send_performed: false`, `scheduled: false`, and
 `production_send_authorized: false`.
 
-These tools do not bypass the absent send/schedule surface. They provide
-evidence that an operator can review before using a separately approved send
-path.
+The send apply tools are deliberately narrower than Interspire's native admin
+surface. They do not accept arbitrary admin URLs, do not schedule mail, and do
+not trigger cron. They post only the final Send-page form captured from the
+freshly proven wizard page, and only when the relevant runtime controls are
+enabled.
+
+## EDM Template Editing And Render Artifacts
+
+The semantic template tools are wrappers over the guarded campaign form-write
+surface. They provide easier fields for EDM work, but still preserve the
+preview/apply plan-id model, current-form readback, approved field allowlist,
+hidden control preservation, and post-apply verification used by the generic
+campaign apply tools.
+
+`interspire_campaign_render_artifact` is read-only against Interspire and writes
+private local artifacts outside the repository. Its output is artifact
+metadata, not visual proof. Operators or agents must open the generated preview
+HTML in a browser and inspect desktop/mobile screenshots before making visual
+claims.
 
 ## Sensitive Field Query
 
