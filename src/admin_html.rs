@@ -865,6 +865,10 @@ fn is_login_csrf_field(name: &str) -> bool {
 fn extract_js_string_assignment(html: &str, name: &str) -> Option<String> {
     let mut remainder = html;
     while let Some(name_offset) = remainder.find(name) {
+        if !is_js_identifier_match(remainder, name_offset, name.len()) {
+            remainder = &remainder[name_offset + name.len()..];
+            continue;
+        }
         let after_name = &remainder[name_offset + name.len()..];
         let eq_offset = after_name.find('=')?;
         let after_eq = after_name[eq_offset + 1..].trim_start();
@@ -884,6 +888,16 @@ fn extract_js_string_assignment(html: &str, name: &str) -> Option<String> {
         remainder = &token_body[end_offset + quote.len_utf8()..];
     }
     None
+}
+
+fn is_js_identifier_match(input: &str, offset: usize, len: usize) -> bool {
+    let before = input[..offset].chars().next_back();
+    let after = input[offset + len..].chars().next();
+    !before.is_some_and(is_js_identifier_char) && !after.is_some_and(is_js_identifier_char)
+}
+
+fn is_js_identifier_char(ch: char) -> bool {
+    ch == '_' || ch == '$' || ch.is_ascii_alphanumeric()
 }
 
 fn normalize_csrf_token(value: &str) -> Option<String> {
@@ -1719,6 +1733,25 @@ mod tests {
             Some(LoginCsrfToken {
                 field_name: "csrfToken".to_string(),
                 value: "iem8-token-789".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn login_csrf_token_script_value_requires_identifier_boundary() {
+        let html = r#"
+            <script>
+              window.NOT_IEM_CSRF_TOKEN = 'wrong-token';
+              window.IEM_CSRF_TOKEN_BACKUP = 'also-wrong';
+              window.IEM_CSRF_TOKEN = 'right-token';
+            </script>
+        "#;
+
+        assert_eq!(
+            extract_login_csrf_token(html),
+            Some(LoginCsrfToken {
+                field_name: "csrfToken".to_string(),
+                value: "right-token".to_string(),
             })
         );
     }
