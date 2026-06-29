@@ -1,17 +1,19 @@
 use interspire_mcp::{
-    AudienceHygieneExportBeginRequest, AudienceHygieneExportReport, AudienceHygieneExportRequest,
-    AudienceHygieneExportResumeRequest, AudienceHygieneExportStatusRequest, CampaignReadbackReport,
-    CampaignReadbackRequest, CampaignUpdateApplyRequest, CampaignUpdatePreviewRequest,
-    ContactStateReport, ContactStateRequest, GuardedWriteApplyReport, GuardedWritePreviewReport,
-    InterspireError, InterspireMcpServer, InterspireReadBackend, ListOwnerReadbackReport,
-    ListOwnerReadbackRequest, ListSummaryReport, ListSummaryRequest, ListUpdateApplyRequest,
-    ListUpdatePreviewRequest, QueueControlApplyReport, QueueControlApplyRequest,
-    QueueControlPreviewReport, QueueControlPreviewRequest, QueueStatsReadbackReport,
-    QueueStatsReadbackRequest, SensitiveFieldQueryReport, SensitiveFieldQueryRequest,
-    SettingsAuditReport, SettingsAuditRequest, SettingsUpdateApplyRequest,
-    SettingsUpdatePreviewRequest, StatusReport, StatusRequest, UserSmtpReadbackReport,
-    UserSmtpReadbackRequest, UserUpdateApplyRequest, UserUpdatePreviewRequest,
-    WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
+    AdminSessionProbeReport, AdminSessionProbeRequest, AudienceHygieneExportBeginRequest,
+    AudienceHygieneExportReport, AudienceHygieneExportRequest, AudienceHygieneExportResumeRequest,
+    AudienceHygieneExportStatusRequest, CampaignBodyAuditReport, CampaignBodyAuditRequest,
+    CampaignReadbackReport, CampaignReadbackRequest, CampaignUpdateApplyRequest,
+    CampaignUpdatePreviewRequest, ContactStateReport, ContactStateRequest, GuardedWriteApplyReport,
+    GuardedWritePreviewReport, InterspireError, InterspireMcpServer, InterspireReadBackend,
+    ListOwnerReadbackReport, ListOwnerReadbackRequest, ListSummaryReport, ListSummaryRequest,
+    ListUpdateApplyRequest, ListUpdatePreviewRequest, QueueControlApplyReport,
+    QueueControlApplyRequest, QueueControlPreviewReport, QueueControlPreviewRequest,
+    QueueStatsReadbackReport, QueueStatsReadbackRequest, SeedReadinessGateReport,
+    SeedReadinessGateRequest, SendWizardReadbackReport, SendWizardReadbackRequest,
+    SensitiveFieldQueryReport, SensitiveFieldQueryRequest, SettingsAuditReport,
+    SettingsAuditRequest, SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport,
+    StatusRequest, UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
+    UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
 };
 use mcp_toolkit_testing::assert_tool_schema_snapshot;
 use std::{path::PathBuf, sync::Arc};
@@ -52,6 +54,13 @@ impl InterspireReadBackend for FixtureBackend {
         Ok(SettingsAuditReport::fixture())
     }
 
+    fn admin_session_probe(
+        &self,
+        _request: &AdminSessionProbeRequest,
+    ) -> Result<AdminSessionProbeReport, InterspireError> {
+        Ok(AdminSessionProbeReport::fixture())
+    }
+
     fn user_smtp_readback(
         &self,
         _request: &UserSmtpReadbackRequest,
@@ -85,6 +94,27 @@ impl InterspireReadBackend for FixtureBackend {
         _request: &CampaignReadbackRequest,
     ) -> Result<CampaignReadbackReport, InterspireError> {
         Ok(CampaignReadbackReport::fixture())
+    }
+
+    fn campaign_body_audit(
+        &self,
+        _request: &CampaignBodyAuditRequest,
+    ) -> Result<CampaignBodyAuditReport, InterspireError> {
+        Ok(CampaignBodyAuditReport::fixture())
+    }
+
+    fn send_wizard_readback(
+        &self,
+        _request: &SendWizardReadbackRequest,
+    ) -> Result<SendWizardReadbackReport, InterspireError> {
+        Ok(SendWizardReadbackReport::fixture())
+    }
+
+    fn seed_readiness_gate(
+        &self,
+        _request: &SeedReadinessGateRequest,
+    ) -> Result<SeedReadinessGateReport, InterspireError> {
+        Ok(SeedReadinessGateReport::fixture())
     }
 
     fn campaign_update_preview(

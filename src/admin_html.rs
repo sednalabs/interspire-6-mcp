@@ -6,6 +6,7 @@
 //! raw saved HTML, cookies, passwords, contact exports, or send/cron actions.
 
 mod forms;
+mod proof;
 
 use crate::{
     config::{AdminHtmlConfig, InterspireVersion, WriteExecutionMode},

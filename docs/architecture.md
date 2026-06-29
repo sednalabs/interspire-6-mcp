@@ -12,6 +12,9 @@ Marketer state in typed, redacted, operator-oriented tools.
 - Output: compact JSON strings shaped for MCP clients and agent workflows.
 - Safety posture: read-only by default, with guarded queue cancel/delete plus
   guarded no-send campaign, list, user, and non-secret settings apply paths.
+- No-mutation proof posture: selected admin wizard pages may be rendered for
+  evidence, but final send/schedule/import/contact/suppression actions remain
+  unavailable.
 - Sensitive read posture: toolkit-owned metadata and policy preflight, with
   Interspire-owned target/field allowlists.
 
@@ -53,6 +56,7 @@ parsers, and operator wording stay in this repository.
 | `xml_api.rs` | Interspire XML API reads and XML parsing. |
 | `admin_html.rs` | Authenticated admin HTML reads, queue-control extraction, and redacted parsing helpers. |
 | `admin_html/forms.rs` | Guarded form snapshotting, allowlisted field updates, preview/apply plan binding, and field-scoped POST construction. |
+| `admin_html/proof.rs` | No-mutation admin proof reads for admin reachability, campaign body audit, Send wizard readback, and seed-readiness gates. |
 | `safety.rs` | URL allowlists for read pages and guarded queue/form write routes. |
 | `guarded_write.rs` | Shared plan-id and runtime enablement checks. |
 | `audience_hygiene.rs` | Private audience artifact construction outside git. |
@@ -61,6 +65,7 @@ parsers, and operator wording stay in this repository.
 | `response/queue.rs` | Queue preview/apply request and report contracts. |
 | `response/forms.rs` | Guarded campaign/list/user/settings write request and report contracts. |
 | `response/audience.rs` | Warm-up readiness and audience-hygiene request/report contracts. |
+| `response/send_wizard.rs` | Admin-session, campaign-body, Send wizard, and seed-readiness proof contracts. |
 | `response.rs` | Thin re-export module for the response contract tree. |
 | `redact.rs` | Redaction helpers for emails, hosts, URLs, and secret-shaped text. |
 
@@ -82,6 +87,8 @@ important operational state:
 - schedule and stats rows;
 - queue-control preview/action links;
 - persisted form state for guarded campaign, list, user, and settings edits.
+- Send wizard proof state for selected campaign/list readiness, with the final
+  editable form parsed but not submitted.
 
 Admin HTML access is therefore route-shaped, not browser-shaped. The backend
 does not expose a general fetch tool, a click tool, arbitrary query strings, or
@@ -108,6 +115,11 @@ Interspire-specific route selection and field allowlists stay in
 `admin_html.rs`. The current allowlist is intentionally limited to setup
 settings plus list sender/reply/bounce email fields; normal readback tools
 continue to redact values.
+
+No-mutation Send proof uses the MCP Toolkit no-mutation-proof posture and
+Interspire route allowlists together. The generic toolkit metadata describes
+the proof boundary for MCP clients, while this repository owns the Step2-only
+route classifier, parser, queue/stat invariant checks, and negative send flags.
 
 ## Contract Tests
 

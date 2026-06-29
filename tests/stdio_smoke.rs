@@ -5,10 +5,12 @@ fn stdio_initializes_and_lists_tools() {
     assert_stdio_tools_list(
         env!("CARGO_BIN_EXE_interspire-mcp"),
         &[
+            "interspire_admin_session_probe",
             "interspire_audience_hygiene_export",
             "interspire_audience_hygiene_export_begin",
             "interspire_audience_hygiene_export_resume",
             "interspire_audience_hygiene_export_status",
+            "interspire_campaign_body_audit",
             "interspire_campaign_readback",
             "interspire_campaign_update_apply",
             "interspire_campaign_update_preview",
@@ -20,6 +22,8 @@ fn stdio_initializes_and_lists_tools() {
             "interspire_queue_control_apply",
             "interspire_queue_control_preview",
             "interspire_queue_stats_readback",
+            "interspire_seed_readiness_gate",
+            "interspire_send_wizard_readback",
             "interspire_sensitive_field_query",
             "interspire_settings_audit",
             "interspire_settings_update_apply",
