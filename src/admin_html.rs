@@ -49,6 +49,13 @@ pub struct ListEditMetadata {
     pub bounce_email_redacted: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactStateHtmlReadback {
+    pub found_on_list: Option<bool>,
+    pub warnings: Vec<String>,
+    pub evidence_notes: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct QueueControlApplyEvidence {
     pub before_candidate_count: usize,
@@ -257,6 +264,77 @@ impl AdminHtmlClient {
             sections,
             warnings: Vec::new(),
             evidence: admin_evidence(vec!["allowlisted Settings tab GET reads".to_string()]),
+        })
+    }
+
+    pub fn contact_state_readback(
+        &self,
+        email: &str,
+        list_id: u64,
+    ) -> Result<ContactStateHtmlReadback, InterspireError> {
+        if !self.config.is_configured() {
+            return Err(InterspireError::AdminHtmlNotConfigured);
+        }
+        self.login()?;
+
+        let email = normalize_exact_email_query(email)?;
+        let paths = subscriber_exact_search_paths(list_id, &email);
+        let mut warnings = Vec::new();
+        let mut attempted = 0usize;
+        let mut saw_search_page = false;
+        let mut route_http_failures = 0usize;
+
+        for path in paths {
+            attempted += 1;
+            let html = match self.get_allowed(&path) {
+                Ok(html) => html,
+                Err(err) => {
+                    route_http_failures += 1;
+                    warnings.push(format!(
+                        "subscriber exact-search route candidate skipped: {}",
+                        redact::redact_sensitive_text(&err.to_string())
+                    ));
+                    continue;
+                }
+            };
+            let parsed = parse_subscriber_exact_search_page(&html, &email)?;
+            warnings.extend(parsed.warnings);
+            saw_search_page |= parsed.looks_like_subscriber_page;
+            if parsed.exact_email_found {
+                return Ok(ContactStateHtmlReadback {
+                    found_on_list: Some(true),
+                    warnings,
+                    evidence_notes: vec![
+                        "allowlisted Subscribers exact-search GET read".to_string(),
+                        "exact requested email was found on the selected list page; raw subscriber row was not returned".to_string(),
+                    ],
+                });
+            }
+        }
+
+        if attempted == route_http_failures {
+            warnings.push(
+                "all subscriber exact-search route candidates failed before returning HTML"
+                    .to_string(),
+            );
+            return Ok(ContactStateHtmlReadback {
+                found_on_list: None,
+                warnings,
+                evidence_notes: vec![
+                    "allowlisted Subscribers exact-search GET attempted".to_string(),
+                    "no subscriber search HTML was available to corroborate contact state"
+                        .to_string(),
+                ],
+            });
+        }
+
+        Ok(ContactStateHtmlReadback {
+            found_on_list: if saw_search_page { Some(false) } else { None },
+            warnings,
+            evidence_notes: vec![
+                "allowlisted Subscribers exact-search GET read".to_string(),
+                "exact requested email was not found; absence remains low-confidence unless corroborated elsewhere".to_string(),
+            ],
         })
     }
 
@@ -1205,6 +1283,116 @@ fn first_value(values: &HashMap<String, String>, keys: &[&str]) -> Option<String
         .filter(|value| !value.trim().is_empty())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SubscriberExactSearchParse {
+    exact_email_found: bool,
+    looks_like_subscriber_page: bool,
+    warnings: Vec<String>,
+}
+
+fn subscriber_exact_search_paths(list_id: u64, email: &str) -> Vec<String> {
+    let email = url::form_urlencoded::byte_serialize(email.trim().as_bytes()).collect::<String>();
+    vec![
+        format!("index.php?Page=Subscribers&Action=Manage&Lists={list_id}&Search={email}"),
+        format!("index.php?Page=Subscribers&Action=Manage&Lists%5B%5D={list_id}&Search={email}"),
+        format!("index.php?Page=Subscribers&Action=Manage&List={list_id}&Search={email}"),
+        format!("index.php?Page=Subscribers&Action=Manage&listid={list_id}&Email={email}"),
+    ]
+}
+
+fn normalize_exact_email_query(email: &str) -> Result<String, InterspireError> {
+    let email = email.trim().to_ascii_lowercase();
+    if email.len() > 254
+        || email.chars().any(|ch| ch.is_control())
+        || email.contains('*')
+        || !email.contains('@')
+        || email.starts_with('@')
+        || email.ends_with('@')
+    {
+        return Err(InterspireError::Safety(
+            "contact-state HTML fallback requires one exact email address".to_string(),
+        ));
+    }
+    Ok(email)
+}
+
+fn parse_subscriber_exact_search_page(
+    html: &str,
+    email: &str,
+) -> Result<SubscriberExactSearchParse, InterspireError> {
+    let document = Html::parse_document(html);
+    let row_selector =
+        Selector::parse("tr").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
+    let link_selector =
+        Selector::parse("a").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
+    let email = email.trim().to_ascii_lowercase();
+    let mut exact_email_found = false;
+    let mut looks_like_subscriber_page = false;
+    let mut warnings = Vec::new();
+    let mut inspected_rows = 0usize;
+    let mut email_like_cells = 0usize;
+
+    for row in document.select(&row_selector) {
+        if row_contains_nested_rows(&row, &row_selector) {
+            continue;
+        }
+        let row_text = compact_text(&row.text().collect::<Vec<_>>().join(" "));
+        if row_text.len() < 3 {
+            continue;
+        }
+        inspected_rows += 1;
+        let row_lower = row_text.to_ascii_lowercase();
+        looks_like_subscriber_page |= row_lower.contains("subscriber")
+            || row_lower.contains("email")
+            || row_lower.contains("contact");
+        email_like_cells += row_text
+            .split_whitespace()
+            .filter(|part| part.contains('@'))
+            .count();
+        if row_contains_exact_email(&row_text, &email) {
+            exact_email_found = true;
+            break;
+        }
+        for link in row.select(&link_selector) {
+            if let Some(href) = link.value().attr("href") {
+                let href_lower = href.to_ascii_lowercase();
+                looks_like_subscriber_page |= href_lower.contains("page=subscribers");
+            }
+        }
+    }
+
+    if inspected_rows == 0 {
+        warnings.push("subscriber exact-search page contained no parseable rows".to_string());
+    }
+    if email_like_cells > 5 && !exact_email_found {
+        warnings.push(
+            "subscriber exact-search page contained multiple email-like values; result treated as low-confidence absence"
+                .to_string(),
+        );
+    }
+
+    Ok(SubscriberExactSearchParse {
+        exact_email_found,
+        looks_like_subscriber_page,
+        warnings,
+    })
+}
+
+fn row_contains_exact_email(row_text: &str, email: &str) -> bool {
+    row_text.split(email_token_separator).any(|part| {
+        let candidate = part.trim_matches(email_token_trim).to_ascii_lowercase();
+        candidate == email
+    })
+}
+
+fn email_token_separator(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '<' | '>' | '"' | '\'' | '(' | ')' | '[' | ']' | ',')
+}
+
+fn email_token_trim(ch: char) -> bool {
+    matches!(ch, '.' | ';' | ':' | '!' | '?' | '\u{00a0}')
+}
+
 pub fn parse_settings_fields(
     section: &str,
     html: &str,
@@ -2082,6 +2270,68 @@ mod tests {
     }
 
     #[test]
+    fn subscriber_exact_search_parser_detects_exact_email_without_returning_row() {
+        let html = r#"
+            <table>
+              <tr><th>Email</th><th>Status</th></tr>
+              <tr>
+                <td>person@example.test</td>
+                <td>Active Confirmed <a href="index.php?Page=Subscribers&Action=Edit&id=12">Edit</a></td>
+              </tr>
+            </table>
+        "#;
+
+        let parsed = parse_subscriber_exact_search_page(html, "person@example.test")
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(parsed.exact_email_found);
+        assert!(parsed.looks_like_subscriber_page);
+        assert!(format!("{parsed:?}").contains("exact_email_found"));
+        assert!(!format!("{parsed:?}").contains("person@example.test"));
+    }
+
+    #[test]
+    fn subscriber_exact_search_parser_does_not_match_email_substrings() {
+        let html = r#"
+            <table>
+              <tr><th>Email</th><th>Status</th></tr>
+              <tr><td>notperson@example.test</td><td>Active Confirmed</td></tr>
+            </table>
+        "#;
+
+        let parsed = parse_subscriber_exact_search_page(html, "person@example.test")
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(!parsed.exact_email_found);
+        assert!(parsed.looks_like_subscriber_page);
+    }
+
+    #[test]
+    fn subscriber_exact_search_client_uses_allowlisted_read_and_redacts_evidence() {
+        let server = spawn_contact_state_fixture_server();
+        let client = AdminHtmlClient::new(test_admin_config(&server.base_url))
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let report = client
+            .contact_state_readback("person@example.test", 7)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(report.found_on_list, Some(true));
+        assert!(report
+            .evidence_notes
+            .iter()
+            .any(|note| note.contains("Subscribers exact-search GET read")));
+        let rendered =
+            serde_json::to_string(&report.evidence_notes).unwrap_or_else(|err| panic!("{err}"));
+        assert!(!rendered.contains("person@example.test"));
+        assert!(server.requests().iter().any(|request| {
+            request.starts_with(
+                "GET /admin/index.php?Page=Subscribers&Action=Manage&Lists=7&Search=person%40example.test ",
+            )
+        }));
+    }
+
+    #[test]
     fn campaign_sender_display_name_is_redacted() {
         let html = r#"
             <form>
@@ -2391,6 +2641,64 @@ mod tests {
         }
     }
 
+    fn spawn_contact_state_fixture_server() -> TestAdminServer {
+        let listener =
+            TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| panic!("bind failed: {err}"));
+        listener
+            .set_nonblocking(true)
+            .unwrap_or_else(|err| panic!("set_nonblocking failed: {err}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|err| panic!("local_addr failed: {err}"));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let thread_requests = Arc::clone(&requests);
+
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_millis(250)))
+                            .unwrap_or_else(|err| panic!("set_read_timeout failed: {err}"));
+                        let mut buffer = [0_u8; 8192];
+                        let bytes = stream
+                            .read(&mut buffer)
+                            .unwrap_or_else(|err| panic!("test request read failed: {err}"));
+                        let request = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+                        thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while push: {err}")
+                            })
+                            .push(request.clone());
+                        write_contact_state_fixture_response(&mut stream, &request);
+                        if thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while count: {err}")
+                            })
+                            .len()
+                            >= 2
+                        {
+                            break;
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("test server accept failed: {err}"),
+                }
+            }
+        });
+
+        TestAdminServer {
+            base_url: format!("http://{address}/admin/"),
+            requests,
+            handle: Some(handle),
+        }
+    }
+
     fn write_campaign_step2_fixture_response(
         stream: &mut std::net::TcpStream,
         request: &str,
@@ -2478,6 +2786,33 @@ mod tests {
                 <input name="smtp_server" value="smtp.example.test">
                 <input name="smtp_u" value="smtp-user">
               </form>"#
+        } else {
+            "<html><body>unexpected request</body></html>"
+        };
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .unwrap_or_else(|err| panic!("test response write failed: {err}"));
+    }
+
+    fn write_contact_state_fixture_response(stream: &mut std::net::TcpStream, request: &str) {
+        let body = if request.starts_with("GET /admin/index.php?Page=Lists ") {
+            "<html><body><a href=\"index.php?Page=Lists&Action=Edit&id=7\">List</a></body></html>"
+        } else if request.starts_with(
+            "GET /admin/index.php?Page=Subscribers&Action=Manage&Lists=7&Search=person%40example.test ",
+        ) {
+            r#"<table>
+                <tr><th>Email</th><th>Status</th><th>Action</th></tr>
+                <tr>
+                  <td>person@example.test</td>
+                  <td>Active Confirmed</td>
+                  <td><a href="index.php?Page=Subscribers&Action=Edit&id=12">Edit</a></td>
+                </tr>
+              </table>"#
         } else {
             "<html><body>unexpected request</body></html>"
         };

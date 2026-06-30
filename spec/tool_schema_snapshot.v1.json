@@ -530,7 +530,7 @@
       "name": "interspire_campaign_update_preview"
     },
     {
-      "description": "Check one redacted contact's Interspire XML list presence.",
+      "description": "Check one redacted contact's Interspire list presence with XML first and exact admin-HTML fallback.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {

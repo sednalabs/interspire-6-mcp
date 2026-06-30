@@ -289,7 +289,7 @@ impl InterspireMcpServer {
                     .with_group("read")
                     .with_read_only(true)
                     .with_discovery(ToolDiscoveryMetadata::new(
-                        "Check one redacted contact's Interspire XML list presence.",
+                        "Check one redacted contact's Interspire list presence with XML first and exact admin-HTML fallback.",
                         ["interspire", "contact", "presence"],
                     )),
                 ToolCapability::new("interspire_list_owner_readback")
@@ -552,7 +552,9 @@ impl InterspireMcpServer {
         response::tool_json(self.backend.list_summary(&request))
     }
 
-    #[tool(description = "Check one redacted contact's Interspire XML list presence.")]
+    #[tool(
+        description = "Check one redacted contact's Interspire list presence with XML first and exact admin-HTML fallback."
+    )]
     fn interspire_contact_state(
         &self,
         Parameters(request): Parameters<ContactStateRequest>,

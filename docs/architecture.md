@@ -87,6 +87,10 @@ operators do not mistake API-scope gaps for send-readiness proof. Admin HTML is
 treated as a brittle substrate and is used only where the XML API is missing
 important operational state:
 
+- exact contact-state corroboration when XML cannot prove presence, using an
+  internally generated `Subscribers&Action=Manage` exact-search read that
+  targets one list and one email, returns only redacted/hash evidence, and does
+  not expose a generic subscriber export or admin URL surface;
 - list owner and reply/bounce metadata;
 - global email, bounce, and cron settings;
 - user-level SMTP override state;

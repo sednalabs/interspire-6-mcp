@@ -247,83 +247,87 @@ impl LiveInterspireBackend {
         request: &ContactStateRequest,
     ) -> Result<ContactStateReport, InterspireError> {
         let xml = self.xml_client()?;
-        if !xml.configured() {
-            return Ok(ContactStateReport {
-                ok: true,
-                configured: self.config.admin_html.is_configured(),
-                list_id: request.list_id,
-                email_redacted: redact::redact_email(&request.email),
-                email_hash: redact::email_hash(&request.email),
-                found_on_list: None,
-                xml_found_on_list: None,
-                state: "unknown_xml_not_configured".to_string(),
-                source_authority: "none".to_string(),
-                confidence: "unknown".to_string(),
-                verification_sources: Vec::new(),
-                warnings: vec![
-                    "XML API is not configured; no live contact read attempted".to_string(),
-                    "admin HTML contact corroboration is not yet exposed as a route-safe MCP read; do not use this as send-readiness proof".to_string(),
-                ],
-                evidence: xml_api::xml_evidence(vec!["no request sent".to_string()]),
-            });
+        let html = self.html_client()?;
+        let mut xml_found_on_list = None;
+        let mut admin_html_found_on_list = None;
+        let mut verification_sources = Vec::new();
+        let mut warnings = Vec::new();
+        let mut notes = Vec::new();
+
+        if xml.configured() {
+            match xml.is_subscriber_on_list(&request.email, request.list_id) {
+                Ok(found) => {
+                    xml_found_on_list = Some(found);
+                    verification_sources.push("interspire_xml_api".to_string());
+                    notes.push("subscribers/IsSubscriberOnList XML API read".to_string());
+                    notes.push(contact_state_outcome(found).evidence_note.to_string());
+                }
+                Err(err) => {
+                    verification_sources.push("interspire_xml_api_attempted".to_string());
+                    notes.push("subscribers/IsSubscriberOnList XML API read attempted".to_string());
+                    notes.push(
+                        "XML failure was returned as degraded evidence rather than authoritative absence"
+                            .to_string(),
+                    );
+                    warnings.push(format!(
+                        "XML contact-state read failed: {}",
+                        redact::redact_sensitive_text(&err.to_string())
+                    ));
+                }
+            }
+        } else {
+            warnings.push("XML API is not configured; XML contact read skipped".to_string());
+            notes.push(
+                "XML contact-state read skipped because XML API is not configured".to_string(),
+            );
         }
 
-        let found = match xml.is_subscriber_on_list(&request.email, request.list_id) {
-            Ok(found) => found,
-            Err(err) => {
-                return Ok(ContactStateReport {
-                    ok: true,
-                    configured: true,
-                    list_id: request.list_id,
-                    email_redacted: redact::redact_email(&request.email),
-                    email_hash: redact::email_hash(&request.email),
-                    found_on_list: None,
-                    xml_found_on_list: None,
-                    state: "unknown_xml_error".to_string(),
-                    source_authority: "interspire_xml_api_presence_probe".to_string(),
-                    confidence: "unknown".to_string(),
-                    verification_sources: vec!["interspire_xml_api_attempted".to_string()],
-                    warnings: vec![
-                        format!(
-                            "XML contact-state read failed: {}",
-                            redact::redact_sensitive_text(&err.to_string())
-                        ),
-                        "admin HTML contact corroboration is not yet exposed as a route-safe MCP read; do not use this as send-readiness proof".to_string(),
-                    ],
-                    evidence: xml_api::xml_evidence(vec![
-                        "subscribers/IsSubscriberOnList XML API read attempted".to_string(),
-                        "failure returned as unknown state rather than authoritative absence"
-                            .to_string(),
-                    ]),
-                });
+        if xml_found_on_list != Some(true) {
+            if html.configured() {
+                match html.contact_state_readback(&request.email, request.list_id) {
+                    Ok(html_state) => {
+                        admin_html_found_on_list = html_state.found_on_list;
+                        verification_sources.push("interspire_admin_html_exact_search".to_string());
+                        notes.extend(html_state.evidence_notes);
+                        warnings.extend(html_state.warnings);
+                    }
+                    Err(err) => warnings.push(format!(
+                        "admin HTML contact-state corroboration skipped: {}",
+                        redact::redact_sensitive_text(&err.to_string())
+                    )),
+                }
+            } else {
+                warnings.push(
+                    "admin HTML fallback is not configured; contact-state corroboration skipped"
+                        .to_string(),
+                );
+                notes.push(
+                    "admin HTML contact-state read skipped because admin HTML is not configured"
+                        .to_string(),
+                );
             }
-        };
-        let outcome = contact_state_outcome(found);
+        }
+
+        let outcome = combined_contact_state_outcome(xml_found_on_list, admin_html_found_on_list);
+        warnings.extend(outcome.warnings.iter().map(|value| (*value).to_string()));
         Ok(ContactStateReport {
             ok: true,
-            configured: true,
+            configured: xml.configured() || html.configured(),
             list_id: request.list_id,
             email_redacted: redact::redact_email(&request.email),
             email_hash: redact::email_hash(&request.email),
             found_on_list: outcome.found_on_list,
-            xml_found_on_list: Some(found),
+            xml_found_on_list,
+            admin_html_found_on_list,
             state: outcome.state.to_string(),
             source_authority: outcome.source_authority.to_string(),
             confidence: outcome.confidence.to_string(),
-            verification_sources: vec!["interspire_xml_api".to_string()],
-            warnings: outcome
-                .warnings
-                .iter()
-                .map(|value| (*value).to_string())
-                .collect(),
-            evidence: xml_api::xml_evidence(
-                [
-                    "subscribers/IsSubscriberOnList XML API read".to_string(),
-                    outcome.evidence_note.to_string(),
-                ]
-                .into_iter()
-                .collect(),
-            ),
+            verification_sources,
+            warnings,
+            evidence: Evidence {
+                source: contact_state_evidence_source(xml.configured(), html.configured()),
+                notes,
+            },
         })
     }
 
@@ -555,9 +559,64 @@ fn contact_state_outcome(found: bool) -> ContactStateOutcome {
     }
 }
 
+fn combined_contact_state_outcome(
+    xml_found_on_list: Option<bool>,
+    admin_html_found_on_list: Option<bool>,
+) -> ContactStateOutcome {
+    if xml_found_on_list == Some(true) {
+        return contact_state_outcome(true);
+    }
+
+    if admin_html_found_on_list == Some(true) {
+        return ContactStateOutcome {
+            found_on_list: Some(true),
+            state: "present_on_list_html_corroborated",
+            source_authority: "interspire_admin_html_exact_search",
+            confidence: "medium_presence",
+            evidence_note: "admin HTML exact-search positive membership is treated as list-presence evidence",
+            warnings: &[
+                "admin HTML exact-search proves page-visible list presence only; it does not prove bounce, unsubscribe, complaint, or provider suppression reconciliation",
+                "HTML readback is a brittle fallback used only when XML cannot prove presence",
+            ],
+        };
+    }
+
+    if matches!(xml_found_on_list, Some(false)) || matches!(admin_html_found_on_list, Some(false)) {
+        return ContactStateOutcome {
+            found_on_list: None,
+            state: "not_found_on_list_uncorroborated",
+            source_authority: "interspire_contact_state_degraded_probe",
+            confidence: "low_absence",
+            evidence_note: "one or more readbacks did not find the contact, but absence remains low-confidence",
+            warnings: &[
+                "negative contact-state readback is not treated as authoritative absence",
+                "confirm with a full hygiene ledger or another authoritative contact-state source before making send-readiness decisions",
+            ],
+        };
+    }
+
+    ContactStateOutcome {
+        found_on_list: None,
+        state: "unknown_contact_state",
+        source_authority: "none",
+        confidence: "unknown",
+        evidence_note: "no configured source could prove contact state",
+        warnings: &["contact-state proof is unavailable from the configured sources"],
+    }
+}
+
+fn contact_state_evidence_source(xml_configured: bool, html_configured: bool) -> String {
+    match (xml_configured, html_configured) {
+        (true, true) => "interspire_xml_api+admin_html".to_string(),
+        (true, false) => "interspire_xml_api".to_string(),
+        (false, true) => "interspire_admin_html".to_string(),
+        (false, false) => "none".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::contact_state_outcome;
+    use super::{combined_contact_state_outcome, contact_state_outcome};
 
     #[test]
     fn xml_negative_contact_state_is_low_confidence_absence() {
@@ -583,5 +642,27 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("list presence only")));
+    }
+
+    #[test]
+    fn html_positive_contact_state_can_corroborate_xml_error() {
+        let outcome = combined_contact_state_outcome(None, Some(true));
+
+        assert_eq!(outcome.state, "present_on_list_html_corroborated");
+        assert_eq!(outcome.found_on_list, Some(true));
+        assert_eq!(outcome.confidence, "medium_presence");
+        assert_eq!(
+            outcome.source_authority,
+            "interspire_admin_html_exact_search"
+        );
+    }
+
+    #[test]
+    fn negative_html_contact_state_remains_low_confidence_absence() {
+        let outcome = combined_contact_state_outcome(None, Some(false));
+
+        assert_eq!(outcome.state, "not_found_on_list_uncorroborated");
+        assert_eq!(outcome.found_on_list, None);
+        assert_eq!(outcome.confidence, "low_absence");
     }
 }

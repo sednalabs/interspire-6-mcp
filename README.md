@@ -78,7 +78,7 @@ questions, not for generic administrative access.
 | --- | --- | --- |
 | `interspire_status` | Read | Report configuration, safety posture, and available capabilities. |
 | `interspire_list_summary` | Read | Summarize lists and aggregate subscriber-state counts. |
-| `interspire_contact_state` | Read | Check one redacted contact's XML list presence, with low-confidence warnings for uncorroborated absence. |
+| `interspire_contact_state` | Read | Check one redacted contact's list presence with XML first and exact admin-HTML fallback, while keeping negative absence low confidence. |
 | `interspire_list_owner_readback` | Read | Read list owner, reply-to, and bounce metadata. |
 | `interspire_settings_audit` | Read | Read redacted global email, bounce, and cron settings. |
 | `interspire_admin_session_probe` | Read | Probe authenticated admin reachability through allowlisted read pages. |

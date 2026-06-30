@@ -14,6 +14,7 @@ use url::Url;
 pub enum AdminReadPage {
     Lists,
     ListEdit { id: u64 },
+    SubscriberExactSearch { list_id: u64 },
     Settings { tab: u8 },
     Users,
     UserEdit { id: u64 },
@@ -53,6 +54,11 @@ impl AdminReadPage {
         match self {
             Self::Lists => "index.php?Page=Lists".to_string(),
             Self::ListEdit { id } => format!("index.php?Page=Lists&Action=Edit&id={id}"),
+            Self::SubscriberExactSearch { list_id } => {
+                format!(
+                    "index.php?Page=Subscribers&Action=Manage&Lists={list_id}&Search=redacted%40example.invalid"
+                )
+            }
             Self::Settings { tab } => format!("index.php?Page=Settings&Tab={tab}"),
             Self::Users => "index.php?Page=Users".to_string(),
             Self::UserEdit { id } => format!("index.php?Page=Users&Action=Edit&UserID={id}"),
@@ -223,6 +229,28 @@ pub fn classify_allowed_admin_get(url: &Url) -> Result<AdminReadPage, Interspire
                     InterspireError::Safety("list edit page missing numeric id".to_string())
                 })?;
             Ok(AdminReadPage::ListEdit { id })
+        }
+        (Some("Subscribers"), Some("Manage")) => {
+            ensure_only_query_keys(
+                &pairs,
+                &[
+                    "Page",
+                    "Action",
+                    "List",
+                    "Lists",
+                    "Lists[]",
+                    "listid",
+                    "ListID",
+                    "Search",
+                    "search",
+                    "Email",
+                    "email",
+                    "SearchEmail",
+                ],
+            )?;
+            let list_id = subscriber_search_list_id(&pairs)?;
+            let _ = subscriber_exact_search_email(&pairs)?;
+            Ok(AdminReadPage::SubscriberExactSearch { list_id })
         }
         (Some("Settings"), None) => {
             ensure_only_query_keys(&pairs, &["Page", "Tab"])?;
@@ -888,6 +916,75 @@ fn query_value(
         .map(|(_, value)| value.to_string())
 }
 
+fn subscriber_search_list_id(
+    pairs: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)],
+) -> Result<u64, InterspireError> {
+    let keys = ["list", "lists", "lists[]", "listid"];
+    let matches = keys
+        .iter()
+        .filter_map(|wanted| {
+            pairs
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(wanted))
+                .and_then(|(_, value)| value.parse::<u64>().ok())
+        })
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [single] if *single > 0 => Ok(*single),
+        [] => Err(InterspireError::Safety(
+            "subscriber exact search missing numeric list id".to_string(),
+        )),
+        _ => Err(InterspireError::Safety(
+            "subscriber exact search must target exactly one list id".to_string(),
+        )),
+    }
+}
+
+fn subscriber_exact_search_email(
+    pairs: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)],
+) -> Result<String, InterspireError> {
+    let keys = ["search", "email", "searchemail"];
+    let matches = keys
+        .iter()
+        .filter_map(|wanted| {
+            pairs
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(wanted))
+                .map(|(_, value)| value.trim().to_string())
+        })
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+
+    let email = match matches.as_slice() {
+        [single] => single,
+        [] => {
+            return Err(InterspireError::Safety(
+                "subscriber exact search missing email query".to_string(),
+            ))
+        }
+        _ => {
+            return Err(InterspireError::Safety(
+                "subscriber exact search must include exactly one email query".to_string(),
+            ))
+        }
+    };
+
+    if email.len() > 254
+        || email.chars().any(|ch| ch.is_control())
+        || email.contains('*')
+        || !email.contains('@')
+        || email.starts_with('@')
+        || email.ends_with('@')
+    {
+        return Err(InterspireError::Safety(
+            "subscriber exact search email query is not exact enough".to_string(),
+        ));
+    }
+
+    Ok(email.to_string())
+}
+
 fn optional_numeric_query_value(
     pairs: &[(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)],
     key_name: &str,
@@ -985,6 +1082,13 @@ mod tests {
         assert_eq!(
             classify_allowed_admin_get(&url("index.php?Page=Lists&Action=Edit&id=42")).ok(),
             Some(AdminReadPage::ListEdit { id: 42 })
+        );
+        assert_eq!(
+            classify_allowed_admin_get(&url(
+                "index.php?Page=Subscribers&Action=Manage&Lists=42&Search=person%40example.test"
+            ))
+            .ok(),
+            Some(AdminReadPage::SubscriberExactSearch { list_id: 42 })
         );
         assert_eq!(
             classify_allowed_admin_get(&url("index.php?Page=Settings&Tab=2")).ok(),
@@ -1252,6 +1356,12 @@ mod tests {
             "admin/cron/cron.php",
             "index.php?Page=Subscribers&Action=Import",
             "index.php?Page=Subscribers&Action=Export",
+            "index.php?Page=Subscribers&Action=Manage",
+            "index.php?Page=Subscribers&Action=Manage&Lists=1",
+            "index.php?Page=Subscribers&Action=Manage&Search=person%40example.test",
+            "index.php?Page=Subscribers&Action=Manage&Lists=1&Search=*%40example.test",
+            "index.php?Page=Subscribers&Action=Manage&Lists=1&Lists=2&Search=person%40example.test",
+            "index.php?Page=Subscribers&Action=Manage&Lists=1&Search=person%40example.test&Action=Delete",
             "index.php?Page=Settings&Tab=3",
             "index.php?Page=Lists&Action=Save&id=1",
             "index.php?Page=Users&Action=Save&UserID=1",
