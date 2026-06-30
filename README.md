@@ -103,7 +103,7 @@ than proprietary Interspire source snippets.
 | `interspire_queue_stats_readback` | Read | Read scheduled queue and stats rows without triggering cron. |
 | `interspire_queue_control_preview` | Read preview | Build plan IDs for cancel/delete actions found on the schedule page. |
 | `interspire_queue_control_apply` | Guarded apply | Apply one previously previewed queue cancel/delete plan when write gates are enabled. |
-| `interspire_campaign_readback` | Read | Read campaign rows or one campaign edit-page summary. |
+| `interspire_campaign_readback` | Read | Read campaign manage rows with structured campaign ids/action flags, or one campaign edit-page summary. |
 | `interspire_campaign_body_audit` | Read | Audit redacted campaign body safety signals without returning raw HTML. |
 | `interspire_campaign_copy_preview` | Read preview | Preview a guarded copy plan for creating a draft from a known campaign. |
 | `interspire_campaign_copy_apply` | Guarded apply | Apply one previously previewed campaign-copy plan and return the detected new draft id. |
@@ -354,6 +354,11 @@ confirms the source and copied campaign edit pages can be read back, and states
 that full body/settings equivalence still needs campaign readback/body audit
 before any send decision. It does not send, schedule, trigger cron, import
 contacts, or alter provider state.
+
+`interspire_campaign_readback` returns compact redacted campaign-row summaries
+for human review and a structured `campaign_manage_rows` array with campaign
+ids plus action availability flags. It does not return admin URLs, CSRF tokens,
+raw links, or recipient data.
 
 `interspire_contact_import_preflight` is deliberately not an import tool. It
 accepts a local CSV path only under configured private roots, computes generic

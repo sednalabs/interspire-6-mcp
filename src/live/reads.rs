@@ -511,6 +511,7 @@ impl LiveInterspireBackend {
                 configured: false,
                 campaign_id: request.campaign_id,
                 campaign_fields: Vec::new(),
+                campaign_manage_rows: Vec::new(),
                 campaign_rows: Vec::new(),
                 warnings: vec![
                     "admin HTML fallback is not configured; no campaign read attempted".to_string(),

@@ -212,9 +212,21 @@ pub struct CampaignReadbackReport {
     pub configured: bool,
     pub campaign_id: Option<u64>,
     pub campaign_fields: Vec<RedactedField>,
+    pub campaign_manage_rows: Vec<CampaignManageRow>,
     pub campaign_rows: Vec<String>,
     pub warnings: Vec<String>,
     pub evidence: Evidence,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CampaignManageRow {
+    pub campaign_id: u64,
+    pub row_summary: String,
+    pub action_labels: Vec<String>,
+    pub can_send: bool,
+    pub can_edit: bool,
+    pub can_copy: bool,
+    pub can_delete: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -404,6 +416,7 @@ impl CampaignReadbackReport {
                 name: "subject".to_string(),
                 value: Some("Example campaign".to_string()),
             }],
+            campaign_manage_rows: Vec::new(),
             campaign_rows: Vec::new(),
             warnings: Vec::new(),
             evidence: Evidence {
