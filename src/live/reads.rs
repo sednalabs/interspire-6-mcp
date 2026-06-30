@@ -223,21 +223,68 @@ impl LiveInterspireBackend {
         &self,
         request: &ContactStateRequest,
     ) -> Result<ContactStateReport, InterspireError> {
+        let email = normalize_exact_contact_state_email(&request.email)?;
         let xml = self.xml_client()?;
         let html = self.html_client()?;
         let mut xml_found_on_list = None;
+        let mut xml_exact_search_found_on_list = false;
         let mut admin_html_found_on_list = None;
         let mut verification_sources = Vec::new();
         let mut warnings = Vec::new();
         let mut notes = Vec::new();
 
         if xml.configured() {
-            match xml.is_subscriber_on_list(&request.email, request.list_id) {
+            match xml.is_subscriber_on_list(&email, request.list_id) {
                 Ok(found) => {
                     xml_found_on_list = Some(found);
                     verification_sources.push("interspire_xml_api".to_string());
                     notes.push("subscribers/IsSubscriberOnList XML API read".to_string());
                     notes.push(contact_state_outcome(found).evidence_note.to_string());
+                    if !found {
+                        match xml.is_active_confirmed_subscriber_on_list_by_exact_search(
+                            &email,
+                            request.list_id,
+                        ) {
+                            Ok(true) => {
+                                xml_found_on_list = Some(true);
+                                xml_exact_search_found_on_list = true;
+                                verification_sources
+                                    .push("interspire_xml_api_get_subscribers_exact".to_string());
+                                notes.push(
+                                    "subscribers/GetSubscribers exact-email XML API read"
+                                        .to_string(),
+                                );
+                                notes.push(
+                                    "GetSubscribers exact active/confirmed match proved list presence after IsSubscriberOnList returned false".to_string(),
+                                );
+                                warnings.push(
+                                    "XML IsSubscriberOnList returned false but GetSubscribers exact active/confirmed search found the contact; treating exact-search positive as presence and flagging method disagreement".to_string(),
+                                );
+                            }
+                            Ok(false) => {
+                                verification_sources.push(
+                                    "interspire_xml_api_get_subscribers_exact_attempted"
+                                        .to_string(),
+                                );
+                                notes.push(
+                                    "subscribers/GetSubscribers exact-email XML API read found no active/confirmed exact match".to_string(),
+                                );
+                            }
+                            Err(err) => {
+                                verification_sources.push(
+                                    "interspire_xml_api_get_subscribers_exact_attempted"
+                                        .to_string(),
+                                );
+                                notes.push(
+                                    "subscribers/GetSubscribers exact-email XML API read attempted after negative IsSubscriberOnList".to_string(),
+                                );
+                                warnings.push(format!(
+                                    "XML GetSubscribers exact contact-state read failed: {}",
+                                    redact::redact_sensitive_text(&err.to_string())
+                                ));
+                            }
+                        }
+                    }
                 }
                 Err(err) => {
                     verification_sources.push("interspire_xml_api_attempted".to_string());
@@ -261,7 +308,7 @@ impl LiveInterspireBackend {
 
         if xml_found_on_list != Some(true) {
             if html.configured() {
-                match html.contact_state_readback(&request.email, request.list_id) {
+                match html.contact_state_readback(&email, request.list_id) {
                     Ok(html_state) => {
                         admin_html_found_on_list = html_state.found_on_list;
                         verification_sources.push("interspire_admin_html_exact_search".to_string());
@@ -285,14 +332,18 @@ impl LiveInterspireBackend {
             }
         }
 
-        let outcome = combined_contact_state_outcome(xml_found_on_list, admin_html_found_on_list);
+        let outcome = combined_contact_state_outcome(
+            xml_found_on_list,
+            xml_exact_search_found_on_list,
+            admin_html_found_on_list,
+        );
         warnings.extend(outcome.warnings.iter().map(|value| (*value).to_string()));
         Ok(ContactStateReport {
             ok: true,
             configured: xml.configured() || html.configured(),
             list_id: request.list_id,
-            email_redacted: redact::redact_email(&request.email),
-            email_hash: redact::email_hash(&request.email),
+            email_redacted: redact::redact_email(&email),
+            email_hash: redact::email_hash(&email),
             found_on_list: outcome.found_on_list,
             xml_found_on_list,
             admin_html_found_on_list,
@@ -523,6 +574,22 @@ impl LiveInterspireBackend {
     }
 }
 
+fn normalize_exact_contact_state_email(email: &str) -> Result<String, InterspireError> {
+    let email = email.trim().to_ascii_lowercase();
+    if email.len() > 254
+        || email.chars().any(|ch| ch.is_control())
+        || email.contains('*')
+        || !email.contains('@')
+        || email.starts_with('@')
+        || email.ends_with('@')
+    {
+        return Err(InterspireError::Safety(
+            "contact-state read requires one exact email address".to_string(),
+        ));
+    }
+    Ok(email)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ContactStateOutcome {
     found_on_list: Option<bool>,
@@ -563,8 +630,23 @@ fn contact_state_outcome(found: bool) -> ContactStateOutcome {
 
 fn combined_contact_state_outcome(
     xml_found_on_list: Option<bool>,
+    xml_exact_search_found_on_list: bool,
     admin_html_found_on_list: Option<bool>,
 ) -> ContactStateOutcome {
+    if xml_exact_search_found_on_list {
+        return ContactStateOutcome {
+            found_on_list: Some(true),
+            state: "present_on_list_xml_exact_search",
+            source_authority: "interspire_xml_api_get_subscribers_exact",
+            confidence: "high_presence",
+            evidence_note: "XML GetSubscribers exact active/confirmed match is treated as list-presence evidence",
+            warnings: &[
+                "XML GetSubscribers exact search proves Interspire active confirmed list state only; it does not prove provider suppression reconciliation",
+                "XML IsSubscriberOnList disagreed with exact subscriber search; preserve the method-disagreement warning in operational proof",
+            ],
+        };
+    }
+
     if xml_found_on_list == Some(true) {
         return contact_state_outcome(true);
     }
@@ -618,7 +700,18 @@ fn contact_state_evidence_source(xml_configured: bool, html_configured: bool) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{combined_contact_state_outcome, contact_state_outcome};
+    use super::{
+        combined_contact_state_outcome, contact_state_outcome, ContactStateRequest,
+        LiveInterspireBackend,
+    };
+    use crate::config::{CloudflareAccessConfig, InterspireServerConfig, XmlApiConfig};
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{Arc, Mutex},
+        thread,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn xml_negative_contact_state_is_low_confidence_absence() {
@@ -648,7 +741,7 @@ mod tests {
 
     #[test]
     fn html_positive_contact_state_can_corroborate_xml_error() {
-        let outcome = combined_contact_state_outcome(None, Some(true));
+        let outcome = combined_contact_state_outcome(None, false, Some(true));
 
         assert_eq!(outcome.state, "present_on_list_html_corroborated");
         assert_eq!(outcome.found_on_list, Some(true));
@@ -661,10 +754,153 @@ mod tests {
 
     #[test]
     fn negative_html_contact_state_remains_low_confidence_absence() {
-        let outcome = combined_contact_state_outcome(None, Some(false));
+        let outcome = combined_contact_state_outcome(None, false, Some(false));
 
         assert_eq!(outcome.state, "not_found_on_list_uncorroborated");
         assert_eq!(outcome.found_on_list, None);
         assert_eq!(outcome.confidence, "low_absence");
+    }
+
+    #[test]
+    fn exact_xml_search_positive_has_distinct_outcome() {
+        let outcome = combined_contact_state_outcome(Some(true), true, None);
+
+        assert_eq!(outcome.state, "present_on_list_xml_exact_search");
+        assert_eq!(
+            outcome.source_authority,
+            "interspire_xml_api_get_subscribers_exact"
+        );
+        assert!(outcome
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("active confirmed")));
+    }
+
+    #[test]
+    fn contact_state_rejects_non_exact_email_before_upstream_reads() {
+        let backend = LiveInterspireBackend::new(InterspireServerConfig::default());
+        let err = backend
+            .contact_state_impl(&ContactStateRequest {
+                email: "*@example.test".to_string(),
+                list_id: 6,
+            })
+            .expect_err("wildcard contact-state request should be rejected");
+
+        assert!(err
+            .to_string()
+            .contains("contact-state read requires one exact email address"));
+    }
+
+    #[test]
+    fn contact_state_uses_exact_subscriber_search_when_presence_probe_false() {
+        let listener =
+            TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| panic!("bind failed: {err}"));
+        listener
+            .set_nonblocking(true)
+            .unwrap_or_else(|err| panic!("set_nonblocking failed: {err}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|err| panic!("local_addr failed: {err}"));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let thread_requests = Arc::clone(&requests);
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline
+                && thread_requests
+                    .lock()
+                    .unwrap_or_else(|err| panic!("requests lock poisoned: {err}"))
+                    .len()
+                    < 2
+            {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_millis(250)))
+                            .unwrap_or_else(|err| panic!("set_read_timeout failed: {err}"));
+                        let mut buffer = [0_u8; 16384];
+                        let bytes = stream
+                            .read(&mut buffer)
+                            .unwrap_or_else(|err| panic!("test request read failed: {err}"));
+                        let request = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+                        let body = if request
+                            .contains("<requestmethod>IsSubscriberOnList</requestmethod>")
+                        {
+                            "<response><status>SUCCESS</status><data>0</data></response>"
+                        } else if request.contains("<requestmethod>GetSubscribers</requestmethod>")
+                        {
+                            assert!(request.contains("<Email>person@example.test</Email>"));
+                            "<response><status>SUCCESS</status><data><count>1</count><subscriberlist><item><subscriberid>101</subscriberid><emailaddress>person@example.test</emailaddress><confirmed>1</confirmed><unsubscribed>0</unsubscribed><bounced>0</bounced></item></subscriberlist></data></response>"
+                        } else {
+                            "<response><status>ERROR</status><errormessage>unexpected test request</errormessage></response>"
+                        };
+                        thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("requests lock poisoned while push: {err}")
+                            })
+                            .push(request);
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: text/xml; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        stream
+                            .write_all(response.as_bytes())
+                            .unwrap_or_else(|err| panic!("test response write failed: {err}"));
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("test server accept failed: {err}"),
+                }
+            }
+        });
+
+        let backend = LiveInterspireBackend::new(InterspireServerConfig {
+            xml: XmlApiConfig {
+                endpoint: Some(format!("http://{address}/xml.php")),
+                username: Some("xml-user".to_string()),
+                token: Some("xml-token".to_string()),
+                cloudflare_access: CloudflareAccessConfig::default(),
+            },
+            ..InterspireServerConfig::default()
+        });
+
+        let report = backend
+            .contact_state_impl(&ContactStateRequest {
+                email: "Person@Example.Test".to_string(),
+                list_id: 6,
+            })
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        handle
+            .join()
+            .unwrap_or_else(|err| panic!("test server thread failed: {err:?}"));
+        let requests = requests
+            .lock()
+            .unwrap_or_else(|err| panic!("requests lock poisoned after test: {err}"));
+
+        assert_eq!(requests.len(), 2);
+        assert_eq!(report.found_on_list, Some(true));
+        assert_eq!(report.xml_found_on_list, Some(true));
+        assert_eq!(report.state, "present_on_list_xml_exact_search");
+        assert_eq!(
+            report.source_authority,
+            "interspire_xml_api_get_subscribers_exact"
+        );
+        assert!(report
+            .verification_sources
+            .contains(&"interspire_xml_api_get_subscribers_exact".to_string()));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("active confirmed")));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("method disagreement")));
+        assert!(!serde_json::to_string(&report)
+            .unwrap_or_else(|err| panic!("serialize report: {err}"))
+            .contains("Person@Example.Test"));
     }
 }

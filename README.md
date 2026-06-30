@@ -96,7 +96,7 @@ than proprietary Interspire source snippets.
 | `interspire_status` | Read | Report configuration, safety posture, and available capabilities. |
 | `interspire_xml_auth_probe` | Read | Probe XML API authentication with `authentication/XmlApiTest` before using list or contact reads. |
 | `interspire_list_summary` | Read | Summarize lists and aggregate subscriber-state counts. |
-| `interspire_contact_state` | Read | Check one redacted contact's list presence with XML first and exact admin-HTML fallback, while keeping negative absence low confidence. |
+| `interspire_contact_state` | Read | Check one redacted contact's list presence with XML first, exact XML subscriber-search corroboration after a negative presence probe, and exact admin-HTML fallback, while keeping uncorroborated negative absence low confidence. |
 | `interspire_contact_import_preflight` | Read | Preflight a local cleaned CSV candidate with aggregate counts and SHA-256 only; no contacts are imported. |
 | `interspire_list_owner_readback` | Read | Read list owner, reply-to, and bounce metadata. |
 | `interspire_settings_audit` | Read | Read redacted global email, bounce, and cron settings. |
