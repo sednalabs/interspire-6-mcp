@@ -84,8 +84,8 @@ pub use response::{
     SettingsSectionName, SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport,
     StatusRequest, UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
     UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
-    DEFAULT_HYGIENE_QUERY_BUDGET, DEFAULT_LIST_READ_LIMIT, HARD_HYGIENE_QUERY_BUDGET,
-    HARD_LIST_READ_LIMIT,
+    XmlAuthProbeReport, XmlAuthProbeRequest, DEFAULT_HYGIENE_QUERY_BUDGET, DEFAULT_LIST_READ_LIMIT,
+    HARD_HYGIENE_QUERY_BUDGET, HARD_LIST_READ_LIMIT,
 };
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -131,6 +131,10 @@ pub fn run_audience_hygiene_export_status(
 
 pub trait InterspireReadBackend: Send + Sync {
     fn status(&self, request: &StatusRequest) -> Result<StatusReport, InterspireError>;
+    fn xml_auth_probe(
+        &self,
+        request: &XmlAuthProbeRequest,
+    ) -> Result<XmlAuthProbeReport, InterspireError>;
     fn list_summary(
         &self,
         request: &ListSummaryRequest,
@@ -278,6 +282,13 @@ impl InterspireMcpServer {
                     .with_discovery(ToolDiscoveryMetadata::new(
                         "Report Interspire MCP configuration and safe read capability.",
                         ["interspire", "status", "read-only"],
+                    )),
+                ToolCapability::new("interspire_xml_auth_probe")
+                    .with_group("read")
+                    .with_read_only(true)
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Probe Interspire XML API authentication with authentication/XmlApiTest.",
+                        ["interspire", "xml", "auth", "probe"],
                     )),
                 ToolCapability::new("interspire_list_summary")
                     .with_group("read")
@@ -543,6 +554,16 @@ impl InterspireMcpServer {
     #[tool(description = "Report Interspire MCP configuration and safe read capability.")]
     fn interspire_status(&self, Parameters(request): Parameters<StatusRequest>) -> String {
         response::tool_json(self.backend.status(&request))
+    }
+
+    #[tool(
+        description = "Probe Interspire XML API authentication with authentication/XmlApiTest without reading lists or contacts."
+    )]
+    fn interspire_xml_auth_probe(
+        &self,
+        Parameters(request): Parameters<XmlAuthProbeRequest>,
+    ) -> String {
+        response::tool_json(self.backend.xml_auth_probe(&request))
     }
 
     #[tool(description = "Summarize Interspire contact lists and aggregate state counts.")]
@@ -971,6 +992,13 @@ mod tests {
             Ok(StatusReport::fixture())
         }
 
+        fn xml_auth_probe(
+            &self,
+            _request: &XmlAuthProbeRequest,
+        ) -> Result<XmlAuthProbeReport, InterspireError> {
+            Ok(XmlAuthProbeReport::fixture())
+        }
+
         fn list_summary(
             &self,
             _request: &ListSummaryRequest,
@@ -1259,6 +1287,7 @@ mod tests {
                 "interspire_user_update_apply",
                 "interspire_user_update_preview",
                 "interspire_warmup_audience_readiness",
+                "interspire_xml_auth_probe",
             ]
         );
 

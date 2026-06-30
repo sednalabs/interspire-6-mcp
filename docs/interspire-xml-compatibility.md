@@ -28,6 +28,7 @@ inside `<details>`. Older Interspire builds can reject an empty details node.
 
 | Purpose | requesttype | requestmethod | details | MCP interpretation |
 | --- | --- | --- | --- | --- |
+| Auth probe | `authentication` | `XmlApiTest` | Blank details | Read-only proof that the XML username/token is accepted before list/contact methods are trusted. |
 | List summary | `lists` | `GetLists` | Blank details | Source for list ids, names, and aggregate list counts. |
 | Contact presence | `subscribers` | `IsSubscriberOnList` | `emailaddress`, `listid`, and legacy `listids` | Positive presence is strong list-presence evidence. Absence evidence is labelled by confidence and corroborated where send-readiness depends on it. |
 | Audience hygiene export | `subscribers` | `GetSubscribers` | Top-level `listid` plus `searchinfo.List`, `Status=a`, `Confirmed=1`, and bounded email query | Candidate discovery for private hygiene artifacts, followed by separate suppression and eligibility gates before send decisions. |
@@ -49,6 +50,13 @@ with raw response handling reserved for private operator evidence.
 
 Interspire 8.x exposes list summary reads as `lists/GetLists`. The MCP uses
 that request type for list summary evidence.
+
+Interspire authenticates the XML username and token before dispatching the
+requested method. An error such as `Unable to check user details` therefore
+means the XML credentials, user XML API enablement, or XML API policy need
+attention before the method-specific result can be trusted. The MCP classifies
+these responses as `xml_auth_error` instead of treating them as ordinary list
+or subscriber read failures.
 
 Subscriber XML methods can have two parameter layers: a top-level field used by
 access checks and legacy method parameters used by the underlying API call. The

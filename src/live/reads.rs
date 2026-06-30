@@ -97,6 +97,7 @@ impl LiveInterspireBackend {
             safe_mode: true,
             capabilities: vec![
                 "interspire_status".to_string(),
+                "interspire_xml_auth_probe".to_string(),
                 "interspire_list_summary".to_string(),
                 "interspire_contact_state".to_string(),
                 "interspire_list_owner_readback".to_string(),
@@ -137,6 +138,7 @@ impl LiveInterspireBackend {
                 notes: vec![
                     "stdio MCP only".to_string(),
                     "XML API read methods are lists/GetLists, subscribers/IsSubscriberOnList, and subscribers/GetSubscribers for the guarded audience hygiene export".to_string(),
+                    "XML auth probe uses authentication/XmlApiTest and performs no list, contact, send, queue, or form mutation".to_string(),
                     "admin HTML fallback is limited to login plus explicitly allowlisted GET read pages".to_string(),
                     "send wizard proof is limited to an allowlisted no-send Step2 render and queue/stat invariant readback".to_string(),
                     "campaign render artifacts write private local preview files for native-browser screenshots; they do not mutate Interspire".to_string(),

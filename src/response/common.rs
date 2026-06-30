@@ -11,6 +11,9 @@ pub struct StatusRequest {
     pub include_html_probe: bool,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, rmcp::schemars::JsonSchema, Default)]
+pub struct XmlAuthProbeRequest {}
+
 #[derive(Debug, Clone, serde::Deserialize, rmcp::schemars::JsonSchema)]
 pub struct ListSummaryRequest {
     #[serde(default = "default_true")]
@@ -84,6 +87,17 @@ pub struct StatusReport {
     pub safe_mode: bool,
     pub capabilities: Vec<String>,
     pub blocked_operations: Vec<String>,
+    pub warnings: Vec<String>,
+    pub evidence: Evidence,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct XmlAuthProbeReport {
+    pub ok: bool,
+    pub configured: bool,
+    pub authenticated: bool,
+    pub user_id_present: bool,
+    pub user_name_present: bool,
     pub warnings: Vec<String>,
     pub evidence: Evidence,
 }
@@ -229,6 +243,7 @@ impl StatusReport {
             safe_mode: true,
             capabilities: vec![
                 "interspire_status".to_string(),
+                "interspire_xml_auth_probe".to_string(),
                 "interspire_list_summary".to_string(),
                 "interspire_contact_state".to_string(),
                 "interspire_list_owner_readback".to_string(),
@@ -267,6 +282,23 @@ impl StatusReport {
             evidence: Evidence {
                 source: "fixture".to_string(),
                 notes: vec!["synthetic fixture".to_string()],
+            },
+        }
+    }
+}
+
+impl XmlAuthProbeReport {
+    pub fn fixture() -> Self {
+        Self {
+            ok: true,
+            configured: true,
+            authenticated: true,
+            user_id_present: true,
+            user_name_present: true,
+            warnings: Vec::new(),
+            evidence: Evidence {
+                source: "fixture".to_string(),
+                notes: vec!["authentication/XmlApiTest XML API read".to_string()],
             },
         }
     }

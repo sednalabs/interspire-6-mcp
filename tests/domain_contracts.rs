@@ -17,7 +17,7 @@ use interspire_mcp::{
     SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport, StatusRequest,
     UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
     UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
-    DEFAULT_LIST_READ_LIMIT, HARD_LIST_READ_LIMIT,
+    XmlAuthProbeReport, XmlAuthProbeRequest, DEFAULT_LIST_READ_LIMIT, HARD_LIST_READ_LIMIT,
 };
 use mcp_toolkit_testing::response_safety_contract::{
     assert_json_bool_field_false, assert_payload_excludes_substrings,
@@ -30,6 +30,13 @@ struct ContractBackend;
 impl InterspireReadBackend for ContractBackend {
     fn status(&self, _request: &StatusRequest) -> Result<StatusReport, InterspireError> {
         Ok(StatusReport::fixture())
+    }
+
+    fn xml_auth_probe(
+        &self,
+        _request: &XmlAuthProbeRequest,
+    ) -> Result<XmlAuthProbeReport, InterspireError> {
+        Ok(XmlAuthProbeReport::fixture())
     }
 
     fn list_summary(
@@ -345,6 +352,9 @@ fn status_contract_is_redacted_and_read_only() {
         .contains(&"interspire_contact_state".to_string()));
     assert!(report
         .capabilities
+        .contains(&"interspire_xml_auth_probe".to_string()));
+    assert!(report
+        .capabilities
         .contains(&"interspire_warmup_audience_readiness".to_string()));
     assert!(report
         .capabilities
@@ -396,6 +406,19 @@ fn status_contract_is_redacted_and_read_only() {
         .contains(&"interspire_campaign_template_update_apply".to_string()));
     assert!(!report.guarded_writes_enabled);
     assert!(!report.queue_controls_enabled);
+}
+
+#[test]
+fn xml_auth_probe_contract_does_not_expose_credentials() {
+    let report = ContractBackend
+        .xml_auth_probe(&XmlAuthProbeRequest::default())
+        .unwrap_or_else(|err| panic!("{err}"));
+    let body = serde_json::to_string(&report).unwrap_or_else(|err| panic!("{err}"));
+
+    assert!(report.ok);
+    assert!(report.authenticated);
+    assert!(!body.contains("token"));
+    assert!(!body.contains("password"));
 }
 
 #[test]
@@ -759,7 +782,7 @@ fn production_send_apply_contract_requires_explicit_authorization_and_redacts() 
 fn server_can_be_constructed_with_fixture_backend() {
     let server = InterspireMcpServer::with_backend(Arc::new(ContractBackend))
         .unwrap_or_else(|err| panic!("{err}"));
-    assert_eq!(server.tool_schema_snapshot().len(), 33);
+    assert_eq!(server.tool_schema_snapshot().len(), 34);
 }
 
 #[test]

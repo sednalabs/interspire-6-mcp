@@ -33,7 +33,8 @@ use crate::{
         SettingsAuditReport, SettingsAuditRequest, SettingsUpdateApplyRequest,
         SettingsUpdatePreviewRequest, StatusReport, StatusRequest, UserSmtpReadbackReport,
         UserSmtpReadbackRequest, UserUpdateApplyRequest, UserUpdatePreviewRequest,
-        WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
+        WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest, XmlAuthProbeReport,
+        XmlAuthProbeRequest,
     },
     xml_api::XmlApiClient,
     InterspireReadBackend,
@@ -61,6 +62,13 @@ impl LiveInterspireBackend {
 impl InterspireReadBackend for LiveInterspireBackend {
     fn status(&self, request: &StatusRequest) -> Result<StatusReport, InterspireError> {
         self.status_impl(request)
+    }
+
+    fn xml_auth_probe(
+        &self,
+        _request: &XmlAuthProbeRequest,
+    ) -> Result<XmlAuthProbeReport, InterspireError> {
+        Ok(self.xml_client()?.auth_probe())
     }
 
     fn list_summary(

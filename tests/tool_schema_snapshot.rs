@@ -16,6 +16,7 @@ use interspire_mcp::{
     SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport, StatusRequest,
     UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
     UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
+    XmlAuthProbeReport, XmlAuthProbeRequest,
 };
 use mcp_toolkit_testing::assert_tool_schema_snapshot;
 use std::{path::PathBuf, sync::Arc};
@@ -26,6 +27,13 @@ struct FixtureBackend;
 impl InterspireReadBackend for FixtureBackend {
     fn status(&self, _request: &StatusRequest) -> Result<StatusReport, InterspireError> {
         Ok(StatusReport::fixture())
+    }
+
+    fn xml_auth_probe(
+        &self,
+        _request: &XmlAuthProbeRequest,
+    ) -> Result<XmlAuthProbeReport, InterspireError> {
+        Ok(XmlAuthProbeReport::fixture())
     }
 
     fn list_summary(

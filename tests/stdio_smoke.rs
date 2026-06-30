@@ -38,6 +38,7 @@ fn stdio_initializes_and_lists_tools() {
             "interspire_user_update_apply",
             "interspire_user_update_preview",
             "interspire_warmup_audience_readiness",
+            "interspire_xml_auth_probe",
         ],
     );
 }

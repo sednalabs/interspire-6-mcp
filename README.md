@@ -77,6 +77,7 @@ questions, not for generic administrative access.
 | Tool | Class | Purpose |
 | --- | --- | --- |
 | `interspire_status` | Read | Report configuration, safety posture, and available capabilities. |
+| `interspire_xml_auth_probe` | Read | Probe XML API authentication with `authentication/XmlApiTest` before using list or contact reads. |
 | `interspire_list_summary` | Read | Summarize lists and aggregate subscriber-state counts. |
 | `interspire_contact_state` | Read | Check one redacted contact's list presence with XML first and exact admin-HTML fallback, while keeping negative absence low confidence. |
 | `interspire_list_owner_readback` | Read | Read list owner, reply-to, and bounce metadata. |
@@ -170,6 +171,11 @@ For a default runtime it should also report `form_write_controls_enabled: false`
 and `write_execution_mode: "preview_apply"`. If the Interspire admin or XML API
 is behind Cloudflare Access, `cloudflare_access_configured: true` confirms that
 the service-token header values were loaded without revealing those values.
+Then call `interspire_xml_auth_probe`. It uses Interspire's
+`authentication/XmlApiTest` route and performs no list, contact, queue, form,
+or send action. A `xml_auth_error` means the XML username, XML token, XML API
+enablement, or admin-only policy should be fixed before relying on XML list or
+contact evidence.
 
 For real deployments, load credentials from environment variables or secret
 files outside the repository. Do not commit credentials, cookies, raw exports,
@@ -191,6 +197,10 @@ INTERSPIRE_XML_TOKEN='redacted-token'
 surfaces that expose JavaScript CSRF tokens such as `IEM_CSRF_TOKEN`.
 The supported XML request profile is documented in
 [`docs/interspire-xml-compatibility.md`](docs/interspire-xml-compatibility.md).
+Use the Interspire XML API token for `INTERSPIRE_XML_TOKEN`; it is not the
+admin-login password. Keep a separate XML credentials file per Interspire
+instance so a legacy install and a new install cannot silently share the wrong
+token.
 
 Admin HTML fallback variables:
 

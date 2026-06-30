@@ -1536,6 +1536,14 @@
         "type": "object"
       },
       "name": "interspire_warmup_audience_readiness"
+    },
+    {
+      "description": "Probe Interspire XML API authentication with authentication/XmlApiTest without reading lists or contacts.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object"
+      },
+      "name": "interspire_xml_auth_probe"
     }
   ],
   "version": 1

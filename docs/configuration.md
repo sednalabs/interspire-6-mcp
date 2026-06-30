@@ -32,6 +32,12 @@ INTERSPIRE_XML_TOKEN=redacted-token
 
 Explicit environment variables take precedence over file values.
 
+`INTERSPIRE_XML_TOKEN` is the user's XML API token, not the admin-login
+password. Keep XML credentials separate from admin HTML credentials, and keep
+one XML credentials file per Interspire instance. Reusing a new-instance XML
+token against an older installation can make list/contact reads fail at the
+authentication layer before the requested method is reached.
+
 The supported XML calls are documented in
 [`interspire-xml-compatibility.md`](interspire-xml-compatibility.md). In
 particular, list summary reads use `lists/GetLists`; subscriber reads use the
