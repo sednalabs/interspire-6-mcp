@@ -47,6 +47,20 @@ This repository contains a public Rust MCP server for Interspire Email Marketer
   a local release binary from this workstation for handoff. Use the manual
   `binary-build` workflow, download the artifact, verify the checksum, then
   install that hosted artifact locally if needed.
+- Do not release or operationally use a new MCP capability from this repo
+  merely because it compiles, appears in the tool list, has docs, or was
+  installed from a hosted binary. For every new or materially changed
+  operational capability, update `docs/live-proof-matrix.md` before coding and
+  record the exact fixture tests, negative tests, and live no-send proof needed
+  for the target Interspire major version.
+- The minimum usable proof for Interspire 8 operational prep is a successful
+  live no-send smoke of the exact tool on the target instance. Tool listing,
+  binary checksum verification, and Codex restart prove only installation, not
+  workflow readiness.
+- If a live smoke exposes a mismatch between the advertised tool and actual
+  Interspire behavior, stop operational work, file/update Ops friction, patch
+  the MCP with a fixture/regression test for that shape, and repeat the full
+  affected matrix row before using the tool.
 - Keep the manual `binary-build` workflow lean and predictable. It should
   produce a release binary artifact plus checksum for operator installation,
   use the shared Rust setup action, and avoid turning a one-off install lane

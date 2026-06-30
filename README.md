@@ -76,6 +76,17 @@ This project takes a narrower route. It exposes first-class MCP intent tools
 with compact, redacted JSON output. The tools are designed for operator
 questions, not for generic administrative access.
 
+Operational tools also have to prove the live workflow they claim to support.
+For new or materially changed capabilities, use
+[`docs/live-proof-matrix.md`](docs/live-proof-matrix.md): compile, docs, schema,
+tool listing, hosted binary install, and restart are not enough until the exact
+target workflow has fixture coverage, negative tests, and live no-send proof on
+the intended Interspire major version.
+For source-derived compatibility work, use
+[`docs/source-compatibility-regression.md`](docs/source-compatibility-regression.md)
+and the private source checker. Public tests must use synthetic fixtures rather
+than proprietary Interspire source snippets.
+
 ## Tool Surface
 
 | Tool | Class | Purpose |
@@ -330,6 +341,11 @@ new Interspire list only through the captured list-create form. The apply step
 requires the preview plan id, the guarded-write runtime gates, and a before/after
 list readback that detects exactly one new list id and internally verifies the
 requested fields persisted.
+For Interspire 8.x, the native create route can ignore the visible Bounce Email
+unless local bounce polling is selected. The apply path therefore creates the
+list first, then proves and, if needed, re-saves the new list through the normal
+edit route so non-secret sender/reply/bounce metadata can persist without
+turning on local bounce polling.
 
 `interspire_campaign_copy_preview` and `interspire_campaign_copy_apply` copy a
 known campaign by following only the exact allowlisted Copy route discovered on

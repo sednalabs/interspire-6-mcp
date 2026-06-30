@@ -857,7 +857,7 @@ pub fn classify_allowed_admin_write(url: &Url) -> Result<AdminWriteRoute, Inters
             )?;
             if action
                 .as_deref()
-                .is_some_and(|value| value.eq_ignore_ascii_case("create"))
+                .is_some_and(|value| value.eq_ignore_ascii_case("addlist"))
             {
                 if query_value(&pairs, "id").is_some() {
                     return Err(InterspireError::Safety(
@@ -1331,7 +1331,7 @@ fn ensure_write_intent_matches(
                 || !route
                     .action
                     .as_deref()
-                    .is_some_and(|value| value.eq_ignore_ascii_case("create"))
+                    .is_some_and(|value| value.eq_ignore_ascii_case("addlist"))
                 || route.identifier_value.is_some()
             {
                 return Err(InterspireError::Safety(
@@ -1499,15 +1499,17 @@ mod tests {
     #[test]
     fn allows_only_guarded_list_create_write_route() {
         let route =
-            classify_allowed_admin_write(&url("index.php?Page=Lists&Action=create&csrfToken=abc"))
+            classify_allowed_admin_write(&url("index.php?Page=Lists&Action=AddList&csrfToken=abc"))
                 .unwrap_or_else(|err| panic!("{err}"));
         assert_eq!(route.page, "Lists");
-        assert_eq!(route.action.as_deref(), Some("create"));
+        assert_eq!(route.action.as_deref(), Some("AddList"));
         assert_eq!(route.identifier_value, None);
 
         assert!(
-            classify_allowed_admin_write(&url("index.php?Page=Lists&Action=create&id=42")).is_err()
+            classify_allowed_admin_write(&url("index.php?Page=Lists&Action=AddList&id=42"))
+                .is_err()
         );
+        assert!(classify_allowed_admin_write(&url("index.php?Page=Lists&Action=create")).is_err());
         assert!(classify_allowed_admin_write(&url("index.php?Page=Lists&Action=Import")).is_err());
     }
 

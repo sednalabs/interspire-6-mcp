@@ -160,12 +160,19 @@ const CAMPAIGN_WRITE_FIELDS: [&str; 25] = [
     "textcontent",
 ];
 
-const LIST_WRITE_FIELDS: [&str; 5] = [
+const LIST_WRITE_FIELDS: [&str; 12] = [
     "name",
     "ownername",
     "owneremail",
     "replytoemail",
     "bounceemail",
+    "notifyowner",
+    "unsubscribemailto",
+    "surveyid",
+    "companyname",
+    "companyaddress",
+    "companyphone",
+    "bounce_process",
 ];
 
 const USER_WRITE_FIELDS: [&str; 12] = [
@@ -450,8 +457,8 @@ pub(super) fn guarded_list_create_apply(
 
     let new_list_id = new_ids[0];
     let after_path = AdminReadPage::ListEdit { id: new_list_id }.path();
-    let after_html = client.get_allowed(&after_path)?;
-    let after_snapshot = capture_form_snapshot(
+    let mut after_html = client.get_allowed(&after_path)?;
+    let mut after_snapshot = capture_form_snapshot(
         client.config.base_url.as_deref().unwrap_or_default(),
         &after_path,
         &after_html,
@@ -459,6 +466,28 @@ pub(super) fn guarded_list_create_apply(
             list_id: new_list_id,
         },
     )?;
+    if list_create_missing_persisted_fields(&after_snapshot, updates)?.is_some() {
+        // Interspire 8's AddList route intentionally ignores some visible
+        // metadata, notably BounceEmail, unless local bounce polling is
+        // selected. Re-save the newly created list through the normal edit
+        // route so metadata can be set without enabling local bounce polling.
+        apply_guarded_form_updates(
+            client,
+            GuardedFormTarget::List {
+                list_id: new_list_id,
+            },
+            updates,
+        )?;
+        after_html = client.get_allowed(&after_path)?;
+        after_snapshot = capture_form_snapshot(
+            client.config.base_url.as_deref().unwrap_or_default(),
+            &after_path,
+            &after_html,
+            &GuardedFormTarget::List {
+                list_id: new_list_id,
+            },
+        )?;
+    }
     verify_list_create_fields_persisted(&after_snapshot, updates)?;
     let post_apply_fields = parse_redacted_fields_for_target(
         GuardedFormTarget::List {
@@ -488,11 +517,46 @@ pub(super) fn guarded_list_create_apply(
             let mut notes = vec![
                 "allowlisted list create form POST apply succeeded".to_string(),
                 "allowlisted Lists/List edit readback detected exactly one new list".to_string(),
+                "new list metadata was proven from the list edit form after create".to_string(),
             ];
             notes.append(&mut evidence_notes);
             notes
         }),
     })
+}
+
+fn apply_guarded_form_updates(
+    client: &AdminHtmlClient,
+    target: GuardedFormTarget,
+    updates: &[FormFieldUpdate],
+) -> Result<(), InterspireError> {
+    let (read_path, html, _) = guarded_form_html(client, target)?;
+    let snapshot = capture_form_snapshot(
+        client.config.base_url.as_deref().unwrap_or_default(),
+        &read_path,
+        &html,
+        &target,
+    )?;
+    let mut staged = snapshot.clone();
+    let changes = apply_requested_updates(&mut staged, target.allowed_fields(), updates)?;
+    let requested_fields = changes
+        .iter()
+        .map(|change| applied_control_name(&change.name))
+        .collect::<BTreeSet<_>>();
+    let post_fields = staged.to_post_pairs_for_fields(&requested_fields);
+    let response = client
+        .with_access_headers(client.http.post(snapshot.action_url.clone()))
+        .form(&post_fields)
+        .send()
+        .map_err(|err| InterspireError::Http(err.to_string()))?;
+    if !response.status().is_success() && !response.status().is_redirection() {
+        return Err(InterspireError::Http(format!(
+            "guarded post-create list metadata update returned HTTP {}",
+            response.status().as_u16()
+        )));
+    }
+
+    Ok(())
 }
 
 fn list_id_inventory(client: &AdminHtmlClient) -> Result<BTreeSet<u64>, InterspireError> {
@@ -505,6 +569,21 @@ fn verify_list_create_fields_persisted(
     snapshot: &FormSnapshot,
     updates: &[FormFieldUpdate],
 ) -> Result<(), InterspireError> {
+    if let Some(missing) = list_create_missing_persisted_fields(snapshot, updates)? {
+        return Err(InterspireError::Safety(format!(
+            "new list readback did not persist requested fields: {}",
+            missing.join(", ")
+        )));
+    }
+
+    Ok(())
+}
+
+fn list_create_missing_persisted_fields(
+    snapshot: &FormSnapshot,
+    updates: &[FormFieldUpdate],
+) -> Result<Option<Vec<String>>, InterspireError> {
+    let mut missing = Vec::new();
     for update in updates {
         let Some(expected) = update.value.as_deref() else {
             continue;
@@ -512,17 +591,18 @@ fn verify_list_create_fields_persisted(
         let lower_name = update.name.trim().to_ascii_lowercase();
         let target_lower_name = resolve_semantic_field_name(snapshot, &lower_name);
         let Some(actual) = snapshot.raw_field_value(&target_lower_name) else {
-            return Err(InterspireError::Safety(format!(
-                "new list readback did not include requested field {lower_name}"
-            )));
+            missing.push(lower_name);
+            continue;
         };
         if actual.trim() != expected.trim() {
-            return Err(InterspireError::Safety(format!(
-                "new list readback did not match requested field {lower_name}"
-            )));
+            missing.push(lower_name);
         }
     }
-    Ok(())
+    if missing.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(missing))
+    }
 }
 
 fn guarded_form_html(
@@ -803,20 +883,26 @@ pub(super) fn parse_form_controls(form: &ElementRef<'_>) -> Vec<FormControl> {
         let Some(name) = select.value().attr("name") else {
             continue;
         };
-        let selected = select
+        let selected_options = select
             .select(&option_selector)
-            .find(|option| option.value().attr("selected").is_some())
-            .or_else(|| select.select(&option_selector).next());
-        let value = selected
-            .and_then(|option| option.value().attr("value").map(ToString::to_string))
-            .unwrap_or_default();
-        controls.push(FormControl {
-            original_name: name.to_string(),
-            lower_name: name.to_ascii_lowercase(),
-            kind: FormControlKind::Select,
-            value,
-            checked: true,
-        });
+            .filter(|option| option.value().attr("selected").is_some())
+            .collect::<Vec<_>>();
+        let selected_options =
+            if selected_options.is_empty() && select.value().attr("multiple").is_none() {
+                select.select(&option_selector).next().into_iter().collect()
+            } else {
+                selected_options
+            };
+        for option in selected_options {
+            let value = option.value().attr("value").unwrap_or_default().to_string();
+            controls.push(FormControl {
+                original_name: name.to_string(),
+                lower_name: name.to_ascii_lowercase(),
+                kind: FormControlKind::Select,
+                value,
+                checked: true,
+            });
+        }
     }
 
     controls
@@ -931,6 +1017,15 @@ fn apply_requested_updates(
                 }
             }
         } else if let Some(value) = &update.value {
+            if matched_indices.len() > 1
+                && matched_indices
+                    .iter()
+                    .all(|index| snapshot.controls[*index].kind == FormControlKind::Select)
+            {
+                return Err(InterspireError::Safety(format!(
+                    "field {lower_name} maps to a multi-select control; guarded value updates for multi-select fields are not supported"
+                )));
+            }
             if matched_indices.iter().any(|index| {
                 matches!(
                     snapshot.controls[*index].kind,
@@ -1100,6 +1195,7 @@ pub(super) fn should_replay_hidden_control(control: &FormControl) -> bool {
             | "csrf_token"
             | "_token"
             | "form_token"
+            | "total_webhooks"
             | "page"
             | "action"
             | "tab"
@@ -1260,6 +1356,13 @@ mod tests {
                     checked: true,
                 },
                 FormControl {
+                    original_name: "total_webhooks".to_string(),
+                    lower_name: "total_webhooks".to_string(),
+                    kind: FormControlKind::Hidden,
+                    value: "1".to_string(),
+                    checked: true,
+                },
+                FormControl {
                     original_name: "dangerous_hidden_flag".to_string(),
                     lower_name: "dangerous_hidden_flag".to_string(),
                     kind: FormControlKind::Hidden,
@@ -1294,6 +1397,9 @@ mod tests {
         assert!(pairs
             .iter()
             .any(|(name, value)| name == "csrf_token" && value == "safe-token"));
+        assert!(pairs
+            .iter()
+            .any(|(name, value)| name == "total_webhooks" && value == "1"));
         assert!(!pairs
             .iter()
             .any(|(name, _)| name == "dangerous_hidden_flag"));
@@ -1303,10 +1409,114 @@ mod tests {
     }
 
     #[test]
+    fn source_derived_interspire8_list_create_form_is_matched() {
+        let html = r#"
+            <form name="frmListEditor" id="frmListEditor" method="post" action="index.php?Page=Lists&Action=AddList">
+                <input type="text" name="Name" value="">
+                <input type="text" name="OwnerName" value="Operator">
+                <input type="text" name="OwnerEmail" value="owner@example.invalid">
+                <input type="text" name="ReplyToEmail" value="reply@example.invalid">
+                <input type="text" name="BounceEmail" value="bounce@example.invalid">
+                <input type="checkbox" name="NotifyOwner" id="NotifyOwner" value="1" checked>
+                <input type="text" name="UnsubscribeMailto" value="">
+                <select name="SurveyID"><option value="" selected>No Survey</option></select>
+                <select name="webhook_event_1"><option value="1" selected>On Subscribe</option></select>
+                <input type="text" name="WebhookUrl_1" value="https://hooks.example.invalid/list">
+                <input type="hidden" name="total_webhooks" value="1">
+                <select id="availablefields" name="AvailableFields[]" multiple="multiple">
+                    <option value="7" selected>Global field</option>
+                </select>
+                <select id="fields" name="VisibleFields[]" multiple="multiple">
+                    <option value="emailaddress" selected>Email</option>
+                    <option value="format" selected>Format</option>
+                </select>
+                <input class="FormButton SubmitButton" type="submit" value="Save">
+            </form>
+        "#;
+
+        let snapshot = capture_form_snapshot(
+            "https://example.test/admin/",
+            "index.php?Page=Lists&Action=create",
+            html,
+            &GuardedFormTarget::ListCreate,
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(
+            snapshot
+                .action_url
+                .query_pairs()
+                .find(|(key, _)| key == "Action")
+                .map(|(_, value)| value.to_string()),
+            Some("AddList".to_string())
+        );
+        let available = snapshot
+            .available_fields(GuardedFormTarget::ListCreate.allowed_fields())
+            .into_iter()
+            .map(|field| field.name)
+            .collect::<Vec<_>>();
+        assert!(available.contains(&"name".to_string()));
+        assert!(available.contains(&"owneremail".to_string()));
+        assert!(available.contains(&"unsubscribemailto".to_string()));
+
+        let pairs = snapshot.to_post_pairs_for_fields(&BTreeSet::from(["name".to_string()]));
+        assert!(pairs
+            .iter()
+            .any(|(name, value)| name == "total_webhooks" && value == "1"));
+        assert!(pairs
+            .iter()
+            .any(|(name, value)| name == "VisibleFields[]" && value == "emailaddress"));
+        assert!(pairs
+            .iter()
+            .any(|(name, value)| name == "VisibleFields[]" && value == "format"));
+        assert!(pairs
+            .iter()
+            .any(|(name, value)| name == "AvailableFields[]" && value == "7"));
+    }
+
+    #[test]
+    fn multi_select_updates_are_rejected_until_explicitly_modelled() {
+        let mut snapshot = FormSnapshot {
+            action_url: Url::parse("https://example.test/admin/index.php")
+                .unwrap_or_else(|err| panic!("{err}")),
+            controls: vec![
+                FormControl {
+                    original_name: "VisibleFields[]".to_string(),
+                    lower_name: "visiblefields[]".to_string(),
+                    kind: FormControlKind::Select,
+                    value: "emailaddress".to_string(),
+                    checked: true,
+                },
+                FormControl {
+                    original_name: "VisibleFields[]".to_string(),
+                    lower_name: "visiblefields[]".to_string(),
+                    kind: FormControlKind::Select,
+                    value: "format".to_string(),
+                    checked: true,
+                },
+            ],
+        };
+
+        let err = apply_requested_updates(
+            &mut snapshot,
+            &["visiblefields[]"],
+            &[FormFieldUpdate {
+                name: "visiblefields[]".to_string(),
+                value: Some("emailaddress".to_string()),
+                checked: None,
+            }],
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("multi-select"));
+    }
+
+    #[test]
     fn form_plan_id_ignores_volatile_tokens_but_keeps_real_fields() {
         let base = FormSnapshot {
             action_url: Url::parse(
-                "https://example.test/admin/index.php?Page=Lists&Action=create&csrfToken=one",
+                "https://example.test/admin/index.php?Page=Lists&Action=AddList&csrfToken=one",
             )
             .unwrap_or_else(|err| panic!("{err}")),
             controls: vec![
@@ -1328,7 +1538,7 @@ mod tests {
         };
         let mut refreshed = base.clone();
         refreshed.action_url = Url::parse(
-            "https://example.test/admin/index.php?Action=create&Page=Lists&csrfToken=two",
+            "https://example.test/admin/index.php?Action=AddList&Page=Lists&csrfToken=two",
         )
         .unwrap_or_else(|err| panic!("{err}"));
         refreshed.controls[0].value = "two".to_string();

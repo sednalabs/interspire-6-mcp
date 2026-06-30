@@ -184,6 +184,14 @@ requires the same runtime gates and preview plan id as other guarded form
 writes, then rereads list summary and the new list edit page. Apply is
 confirmed only when exactly one new list id appears and the requested fields
 match the persisted form values internally.
+On Interspire 8.x, the create route may ignore visible Bounce Email unless
+local bounce processing is selected. The MCP must not enable local bounce
+polling just to persist metadata. Instead, list-create apply may immediately
+re-save the newly created list through the normal list edit route, using the
+same guarded metadata update model, then prove the final edit-form values.
+Existing list updates must preserve source-defined webhook and multi-select
+state, including `total_webhooks`, `WebhookUrl_*`, `webhook_event_*`,
+`AvailableFields[]`, and `VisibleFields[]`.
 
 Campaign copy is the only route-follow scaffold write. Preview reads the
 campaign manage page, finds the exact Copy link for the requested source
