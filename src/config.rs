@@ -4,7 +4,10 @@
 //! the repository. This module deliberately keeps values opaque and only
 //! reports configured/not-configured state to callers.
 
-use std::{env, fmt, fs, path::Path};
+use std::{
+    env, fmt, fs,
+    path::{Component, Path, PathBuf},
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct InterspireServerConfig {
@@ -150,7 +153,7 @@ impl CloudflareAccessConfig {
     }
 
     fn apply_secret_file(&mut self, path: &Path) {
-        let Ok(contents) = fs::read_to_string(path) else {
+        let Some(contents) = read_secret_file(path) else {
             return;
         };
 
@@ -280,7 +283,7 @@ impl XmlApiConfig {
     }
 
     fn apply_secret_file(&mut self, path: &Path) {
-        let Ok(contents) = fs::read_to_string(path) else {
+        let Some(contents) = read_secret_file(path) else {
             return;
         };
 
@@ -339,7 +342,7 @@ impl AdminHtmlConfig {
     }
 
     fn apply_secret_file(&mut self, path: &Path) {
-        let Ok(contents) = fs::read_to_string(path) else {
+        let Some(contents) = read_secret_file(path) else {
             return;
         };
 
@@ -383,6 +386,33 @@ fn normalize_secret_file_value(value: &str) -> String {
         .to_string()
 }
 
+fn read_secret_file(path: &Path) -> Option<String> {
+    let path = validated_secret_file_path(path)?;
+    fs::read_to_string(path).ok()
+}
+
+fn validated_secret_file_path(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return None;
+    }
+
+    let metadata = fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return None;
+    }
+
+    let canonical = path.canonicalize().ok()?;
+    if canonical != path {
+        return None;
+    }
+
+    Some(canonical)
+}
+
 fn not_blank(value: &str) -> bool {
     !value.trim().is_empty()
 }
@@ -407,8 +437,8 @@ fn env_truthy(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        AdminHtmlConfig, CloudflareAccessConfig, GuardedWriteConfig, ImportPreflightConfig,
-        InterspireVersion, XmlApiConfig,
+        validated_secret_file_path, AdminHtmlConfig, CloudflareAccessConfig, GuardedWriteConfig,
+        ImportPreflightConfig, InterspireVersion, XmlApiConfig,
     };
     use std::{
         fs,
@@ -424,6 +454,33 @@ mod tests {
         let path = std::env::temp_dir().join(format!("interspire-config-test-{unique}.txt"));
         fs::write(&path, contents).expect("write temp config");
         path
+    }
+
+    #[test]
+    fn secret_file_path_validation_rejects_relative_traversal_and_missing_files() {
+        assert!(validated_secret_file_path(PathBuf::from("relative.env").as_path()).is_none());
+        assert!(
+            validated_secret_file_path(PathBuf::from("/tmp/../tmp/interspire.env").as_path())
+                .is_none()
+        );
+        assert!(
+            validated_secret_file_path(PathBuf::from("/tmp/interspire-missing.env").as_path())
+                .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_file_path_validation_rejects_symlinks() {
+        let target = write_temp_file("INTERSPIRE_ADMIN_USERNAME=admin\n");
+        let link = target.with_extension("link");
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+        assert!(validated_secret_file_path(&link).is_none());
+
+        fs::remove_file(&link).expect("remove symlink");
+        fs::remove_file(&target).expect("remove temp config");
     }
 
     #[test]
