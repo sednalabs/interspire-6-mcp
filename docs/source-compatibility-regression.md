@@ -1,9 +1,15 @@
 # Source Compatibility Regression
 
 `interspire-mcp` can be checked against a private Interspire source tree without
-committing proprietary source. The public repository stores only behavioural
-contracts: route names, field names, workflow boundaries, redaction rules, and
-synthetic fixtures.
+committing proprietary source. The public repository stores only interoperability
+contracts that are needed to operate the public admin/XML interface: route
+names, request field names, workflow boundaries, redaction rules, and synthetic
+fixtures.
+
+Do not commit copied Interspire source, saved admin pages from a real instance,
+template bodies, comments, implementation excerpts, private source-root paths,
+credentials, license material, cookies, recipient rows, provider payloads, or
+live message headers.
 
 ## Public Regression Layer
 
@@ -27,7 +33,8 @@ should prove that the MCP:
 
 Use `scripts/private_interspire_source_contract_check.py` for local/private
 source checks. It scans a local Interspire source tree for reviewed contract
-markers and prints aggregate JSON only.
+markers and prints aggregate JSON only. Its output must not include the local
+source root, proprietary snippets, or raw checker patterns.
 
 ```bash
 python3 scripts/private_interspire_source_contract_check.py \
@@ -50,4 +57,5 @@ It is a local compatibility guard before release work:
 
 Do not paste proprietary source snippets into public issues, PRs, docs, tests,
 or tool output. If a private source check fails, report only the contract area,
-missing behavioural marker, target file path, and next public fixture to add.
+missing behavioural contract label, relative source-area path, and next public
+synthetic fixture to add.

@@ -19,11 +19,17 @@ from typing import Iterable
 
 
 @dataclass(frozen=True)
+class ContractPattern:
+    label: str
+    regex: str
+
+
+@dataclass(frozen=True)
 class ContractCheck:
     area: str
     name: str
     relative_path: str
-    patterns: tuple[str, ...]
+    patterns: tuple[ContractPattern, ...]
 
 
 CHECKS: tuple[ContractCheck, ...] = (
@@ -32,11 +38,14 @@ CHECKS: tuple[ContractCheck, ...] = (
         name="list create/read/apply routes",
         relative_path="admin/functions/lists.php",
         patterns=(
-            r"case\s+['\"]create['\"]",
-            r"case\s+['\"]addlist['\"]",
-            r"function\s+CreateList\s*\(",
-            r"function\s+AddList\s*\(",
-            r"\$GLOBALS\[['\"]Action['\"]\]\s*=\s*['\"]AddList['\"]",
+            ContractPattern("create_route", r"case\s+['\"]create['\"]"),
+            ContractPattern("add_list_route", r"case\s+['\"]addlist['\"]"),
+            ContractPattern("create_handler", r"function\s+CreateList\s*\("),
+            ContractPattern("add_list_handler", r"function\s+AddList\s*\("),
+            ContractPattern(
+                "create_form_add_route",
+                r"\$GLOBALS\[['\"]Action['\"]\]\s*=\s*['\"]AddList['\"]",
+            ),
         ),
     ),
     ContractCheck(
@@ -44,19 +53,19 @@ CHECKS: tuple[ContractCheck, ...] = (
         name="list metadata fields",
         relative_path="admin/functions/lists.php",
         patterns=(
-            r"['\"]Name['\"]",
-            r"['\"]OwnerName['\"]",
-            r"['\"]OwnerEmail['\"]",
-            r"['\"]ReplyToEmail['\"]",
-            r"requestGetPOST\(['\"]BounceEmail['\"]",
-            r"requestGetPOST\(['\"]UnsubscribeMailto['\"]",
-            r"requestGetPOST\(['\"]NotifyOwner['\"]",
-            r"requestGetPOST\(['\"]VisibleFields['\"]",
-            r"requestGetPOST\(['\"]AvailableFields['\"]",
-            r"requestGetPOST\(['\"]total_webhooks['\"]",
-            r"requestGetPOST\(['\"]WebhookUrl_",
-            r"requestGetPOST\(['\"]webhook_event_",
-            r"requestGetPOST\(['\"]bounce_process['\"]",
+            ContractPattern("list_name_field", r"['\"]Name['\"]"),
+            ContractPattern("owner_name_field", r"['\"]OwnerName['\"]"),
+            ContractPattern("owner_email_field", r"['\"]OwnerEmail['\"]"),
+            ContractPattern("reply_to_field", r"['\"]ReplyToEmail['\"]"),
+            ContractPattern("bounce_email_field", r"requestGetPOST\(['\"]BounceEmail['\"]"),
+            ContractPattern("unsubscribe_mailto_field", r"requestGetPOST\(['\"]UnsubscribeMailto['\"]"),
+            ContractPattern("owner_notify_field", r"requestGetPOST\(['\"]NotifyOwner['\"]"),
+            ContractPattern("visible_fields_multiselect", r"requestGetPOST\(['\"]VisibleFields['\"]"),
+            ContractPattern("available_fields_multiselect", r"requestGetPOST\(['\"]AvailableFields['\"]"),
+            ContractPattern("webhook_count_hidden_field", r"requestGetPOST\(['\"]total_webhooks['\"]"),
+            ContractPattern("webhook_url_fields", r"requestGetPOST\(['\"]WebhookUrl_"),
+            ContractPattern("webhook_event_fields", r"requestGetPOST\(['\"]webhook_event_"),
+            ContractPattern("bounce_process_field", r"requestGetPOST\(['\"]bounce_process['\"]"),
         ),
     ),
     ContractCheck(
@@ -64,16 +73,19 @@ CHECKS: tuple[ContractCheck, ...] = (
         name="list form template",
         relative_path="admin/com/templates/lists_form.tpl",
         patterns=(
-            r"name=['\"]frmListEditor['\"]",
-            r"action=['\"]index\.php\?Page=Lists&Action=%%GLOBAL_Action%%['\"]",
-            r"name=['\"]Name['\"]",
-            r"name=['\"]OwnerName['\"]",
-            r"name=['\"]OwnerEmail['\"]",
-            r"name=['\"]ReplyToEmail['\"]",
-            r"name=['\"]BounceEmail['\"]",
-            r"name=['\"]VisibleFields\[\]['\"]",
-            r"name=['\"]AvailableFields\[\]['\"]",
-            r"%%GLOBAL_webhook_data%%",
+            ContractPattern("list_editor_form", r"name=['\"]frmListEditor['\"]"),
+            ContractPattern(
+                "list_form_action_placeholder",
+                r"action=['\"]index\.php\?Page=Lists&Action=%%GLOBAL_Action%%['\"]",
+            ),
+            ContractPattern("list_name_input", r"name=['\"]Name['\"]"),
+            ContractPattern("owner_name_input", r"name=['\"]OwnerName['\"]"),
+            ContractPattern("owner_email_input", r"name=['\"]OwnerEmail['\"]"),
+            ContractPattern("reply_to_input", r"name=['\"]ReplyToEmail['\"]"),
+            ContractPattern("bounce_email_input", r"name=['\"]BounceEmail['\"]"),
+            ContractPattern("visible_fields_input", r"name=['\"]VisibleFields\[\]['\"]"),
+            ContractPattern("available_fields_input", r"name=['\"]AvailableFields\[\]['\"]"),
+            ContractPattern("webhook_region", r"%%GLOBAL_webhook_data%%"),
         ),
     ),
     ContractCheck(
@@ -81,11 +93,11 @@ CHECKS: tuple[ContractCheck, ...] = (
         name="campaign management routes",
         relative_path="admin/functions/newsletters.php",
         patterns=(
-            r"case\s+['\"]copy['\"]",
-            r"case\s+['\"]edit['\"]",
-            r"case\s+['\"]create['\"]",
-            r"function\s+EditNewsletter\s*\(",
-            r"function\s+CreateNewsletter\s*\(",
+            ContractPattern("copy_route", r"case\s+['\"]copy['\"]"),
+            ContractPattern("edit_route", r"case\s+['\"]edit['\"]"),
+            ContractPattern("create_route", r"case\s+['\"]create['\"]"),
+            ContractPattern("edit_handler", r"function\s+EditNewsletter\s*\("),
+            ContractPattern("create_handler", r"function\s+CreateNewsletter\s*\("),
         ),
     ),
     ContractCheck(
@@ -93,11 +105,11 @@ CHECKS: tuple[ContractCheck, ...] = (
         name="send wizard boundaries",
         relative_path="admin/functions/send.php",
         patterns=(
-            r"function\s+Process\s*\(",
-            r"Step2",
-            r"Step3",
-            r"Step4",
-            r"Schedule",
+            ContractPattern("send_process_handler", r"function\s+Process\s*\("),
+            ContractPattern("send_step_2", r"Step2"),
+            ContractPattern("send_step_3", r"Step3"),
+            ContractPattern("send_step_4", r"Step4"),
+            ContractPattern("schedule_boundary", r"Schedule"),
         ),
     ),
     ContractCheck(
@@ -105,11 +117,11 @@ CHECKS: tuple[ContractCheck, ...] = (
         name="xml front controller",
         relative_path="admin/com/xml.php",
         patterns=(
-            r"requesttype",
-            r"requestmethod",
-            r"username",
-            r"usertoken",
-            r"php://input",
+            ContractPattern("request_type_parameter", r"requesttype"),
+            ContractPattern("request_method_parameter", r"requestmethod"),
+            ContractPattern("username_parameter", r"username"),
+            ContractPattern("token_parameter", r"usertoken"),
+            ContractPattern("xml_body_input", r"php://input"),
         ),
     ),
     ContractCheck(
@@ -117,9 +129,9 @@ CHECKS: tuple[ContractCheck, ...] = (
         name="xml policy allowlist",
         relative_path="admin/com/xml_allowlist.php",
         patterns=(
-            r"authentication",
-            r"lists",
-            r"subscribers",
+            ContractPattern("authentication_allowlist", r"authentication"),
+            ContractPattern("lists_allowlist", r"lists"),
+            ContractPattern("subscribers_allowlist", r"subscribers"),
         ),
     ),
 )
@@ -133,10 +145,17 @@ def read_text(root: Path, relative_path: str) -> str | None:
         return None
 
 
-def check_patterns(text: str | None, patterns: Iterable[str]) -> tuple[bool, list[str]]:
+def check_patterns(
+    text: str | None,
+    patterns: Iterable[ContractPattern],
+) -> tuple[bool, list[str]]:
     if text is None:
-        return False, ["missing_file"]
-    missing = [pattern for pattern in patterns if re.search(pattern, text, re.IGNORECASE) is None]
+        return False, ["file_present"]
+    missing = [
+        pattern.label
+        for pattern in patterns
+        if re.search(pattern.regex, text, re.IGNORECASE) is None
+    ]
     return not missing, missing
 
 
@@ -181,19 +200,22 @@ def main() -> int:
                 "ok": ok,
                 "pattern_count": len(check.patterns),
                 "missing_count": len(missing),
-                "missing_patterns": missing,
+                "missing_contracts": missing,
             }
         )
 
     failed = [result for result in results if not result["ok"]]
     payload = {
         "ok": not failed,
-        "source_root_checked": str(root),
+        "source_root_checked": True,
         "checks": len(results),
         "passed": len(results) - len(failed),
         "failed": len(failed),
         "results": results,
-        "output_policy": "aggregate contract status only; no proprietary source snippets emitted",
+        "output_policy": (
+            "aggregate contract status only; no source root, proprietary snippets, "
+            "or raw checker patterns emitted"
+        ),
     }
     print(json.dumps(payload, indent=2 if args.pretty else None, sort_keys=True))
     return 1 if failed else 0
