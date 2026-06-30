@@ -117,6 +117,27 @@ impl XmlApiClient {
         parse_is_subscriber_on_list_response(&xml)
     }
 
+    pub fn is_active_confirmed_subscriber_on_list_by_exact_search(
+        &self,
+        email: &str,
+        list_id: u64,
+    ) -> Result<bool, InterspireError> {
+        let email = normalize_exact_email_query(email)?;
+        let records = self.get_subscribers_for_list_matching_with_policy(
+            list_id,
+            &email,
+            CHECKPOINT_XML_REQUEST_ATTEMPTS,
+            CHECKPOINT_XML_REQUEST_TIMEOUT,
+        )?;
+
+        Ok(records.iter().any(|record| {
+            record.email_address.trim().eq_ignore_ascii_case(&email)
+                && record.confirmed
+                && !record.unsubscribed
+                && !record.bounced
+        }))
+    }
+
     pub fn get_subscribers_for_list(
         &self,
         list_id: u64,
@@ -428,6 +449,22 @@ fn subscriber_search_details(list_id: u64, email_query: &str) -> String {
         "<listid>{list_id}</listid><searchinfo><List>{list_id}</List><Status>a</Status><Confirmed>1</Confirmed><Email>{}</Email></searchinfo>",
         escape_xml(email_query)
     )
+}
+
+fn normalize_exact_email_query(email: &str) -> Result<String, InterspireError> {
+    let email = email.trim().to_ascii_lowercase();
+    if email.len() > 254
+        || email.chars().any(|ch| ch.is_control())
+        || email.contains('*')
+        || !email.contains('@')
+        || email.starts_with('@')
+        || email.ends_with('@')
+    {
+        return Err(InterspireError::Safety(
+            "XML contact-state exact search requires one exact email address".to_string(),
+        ));
+    }
+    Ok(email)
 }
 
 fn ensure_success(doc: &roxmltree::Document<'_>) -> Result<(), InterspireError> {
@@ -810,6 +847,17 @@ mod tests {
         assert!(details.contains("<Status>a</Status>"));
         assert!(details.contains("<Confirmed>1</Confirmed>"));
         assert!(details.contains("<Email>@example.test</Email>"));
+    }
+
+    #[test]
+    fn exact_email_query_rejects_wildcards_and_normalizes_case() {
+        assert_eq!(
+            normalize_exact_email_query(" Person@Example.Test ").unwrap_or_default(),
+            "person@example.test"
+        );
+        assert!(normalize_exact_email_query("*@example.test").is_err());
+        assert!(normalize_exact_email_query("@example.test").is_err());
+        assert!(normalize_exact_email_query("person").is_err());
     }
 
     #[test]

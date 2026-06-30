@@ -969,7 +969,7 @@
       "name": "interspire_contact_import_preflight"
     },
     {
-      "description": "Check one redacted contact's Interspire list presence with XML first and exact admin-HTML fallback.",
+      "description": "Check one redacted contact's Interspire list presence with direct XML, exact XML subscriber-search corroboration, and exact admin-HTML fallback.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {

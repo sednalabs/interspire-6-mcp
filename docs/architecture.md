@@ -88,12 +88,15 @@ request/response profile is maintained in
 
 The XML API is preferred for list and subscriber evidence because it has a more
 stable contract than admin HTML. It is the first authority for positive
-list-presence readback wherever it can answer the question. A negative
-`IsSubscriberOnList` response is not treated as authoritative absence unless
-another source corroborates it; the tool reports low-confidence absence so
-operators do not mistake API-scope gaps for send-readiness proof. Admin HTML is
-treated as a brittle substrate and is used only where the XML API is missing
-important operational state:
+list-presence readback wherever it can answer the question. If
+`IsSubscriberOnList` returns false, contact-state proof immediately performs a
+bounded `GetSubscribers` exact-email search and treats only an active,
+confirmed, non-bounced, non-unsubscribed exact match as presence. A remaining
+negative XML result is not treated as authoritative absence unless another
+source corroborates it; the tool reports low-confidence absence so operators do
+not mistake API-scope gaps for send-readiness proof. Admin HTML is treated as a
+brittle substrate and is used only where the XML API is missing important
+operational state:
 
 - exact contact-state corroboration when XML cannot prove presence, using an
   internally generated `Subscribers&Action=Manage` exact-search read that
