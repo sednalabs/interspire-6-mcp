@@ -7,9 +7,9 @@ use crate::{
         blocked_operations, CampaignReadbackReport, CampaignReadbackRequest, ContactStateReport,
         ContactStateRequest, Evidence, ListOwnerReadbackReport, ListOwnerReadbackRequest,
         ListSummaryReport, ListSummaryRequest, QueueStatsReadbackReport, QueueStatsReadbackRequest,
-        SettingsAuditReport, SettingsAuditRequest, StatusReport, StatusRequest,
-        UserSmtpReadbackReport, UserSmtpReadbackRequest, DEFAULT_LIST_READ_LIMIT,
-        HARD_LIST_READ_LIMIT,
+        SettingsAuditReport, SettingsAuditRequest, SettingsInventoryReport,
+        SettingsInventoryRequest, StatusReport, StatusRequest, UserSmtpReadbackReport,
+        UserSmtpReadbackRequest, DEFAULT_LIST_READ_LIMIT, HARD_LIST_READ_LIMIT,
     },
     xml_api,
 };
@@ -94,6 +94,13 @@ impl LiveInterspireBackend {
                 .config
                 .guarded_writes
                 .production_send_controls_enabled,
+            oci_send_ledger_configured: self
+                .config
+                .oci_send_ledger
+                .path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty()),
+            oci_send_ledger_required: self.config.oci_send_ledger.required_for_sends,
             write_execution_mode: self.config.guarded_writes.execution_mode,
             safe_mode: true,
             capabilities: vec![
@@ -103,6 +110,7 @@ impl LiveInterspireBackend {
                 "interspire_contact_state".to_string(),
                 "interspire_list_owner_readback".to_string(),
                 "interspire_settings_audit".to_string(),
+                "interspire_settings_inventory".to_string(),
                 "interspire_admin_session_probe".to_string(),
                 "interspire_user_smtp_readback".to_string(),
                 "interspire_queue_stats_readback".to_string(),
@@ -117,6 +125,8 @@ impl LiveInterspireBackend {
                 "interspire_production_send_apply".to_string(),
                 "interspire_campaign_template_update_preview".to_string(),
                 "interspire_campaign_template_update_apply".to_string(),
+                "interspire_campaign_template_artifact_update_preview".to_string(),
+                "interspire_campaign_template_artifact_update_apply".to_string(),
                 "interspire_campaign_update_preview".to_string(),
                 "interspire_campaign_update_apply".to_string(),
                 "interspire_list_update_preview".to_string(),
@@ -150,6 +160,7 @@ impl LiveInterspireBackend {
                     "campaign render artifacts write private local preview files for native-browser screenshots; they do not mutate Interspire".to_string(),
                     "seed send apply tools are disabled unless guarded write and send-control environment flags are explicitly enabled".to_string(),
                     "production send apply tools are disabled unless guarded write, send-control, and production-send-control environment flags are explicitly enabled".to_string(),
+                    "OCI send-ledger preflight is enforced before guarded send apply only when INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1".to_string(),
                     "audience hygiene export writes private local artifacts only and returns aggregate metadata".to_string(),
                     "queue control apply tools are disabled unless guarded write environment flags are explicitly enabled".to_string(),
                     "guarded form-write tools are disabled unless guarded write environment flags are explicitly enabled".to_string(),
@@ -449,6 +460,30 @@ impl LiveInterspireBackend {
         }
 
         html.settings_audit(request.include_cron)
+    }
+
+    pub(super) fn settings_inventory_impl(
+        &self,
+        request: &SettingsInventoryRequest,
+    ) -> Result<SettingsInventoryReport, InterspireError> {
+        let html = self.html_client()?;
+        if !html.configured() {
+            return Ok(SettingsInventoryReport {
+                ok: true,
+                configured: false,
+                sections: Vec::new(),
+                warnings: vec![
+                    "admin HTML fallback is not configured; no settings inventory read attempted"
+                        .to_string(),
+                ],
+                evidence: Evidence {
+                    source: "interspire_admin_html".to_string(),
+                    notes: vec!["no request sent".to_string()],
+                },
+            });
+        }
+
+        html.settings_inventory(request)
     }
 
     pub(super) fn user_smtp_readback_impl(

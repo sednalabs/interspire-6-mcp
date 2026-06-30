@@ -105,6 +105,8 @@ INTERSPIRE_FORM_WRITE_CONTROLS=1
 INTERSPIRE_CONTACT_WRITE_CONTROLS=0
 INTERSPIRE_SEND_CONTROLS=0
 INTERSPIRE_PRODUCTION_SEND_CONTROLS=0
+INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=0
+INTERSPIRE_OCI_SEND_LEDGER_PATH=/secure/private/oci-send-ledger.jsonl
 ```
 
 Current public behavior:
@@ -117,6 +119,13 @@ Current public behavior:
 - `INTERSPIRE_PRODUCTION_SEND_CONTROLS=1` additionally enables
   `interspire_production_send_apply`, which requires exact expected recipient
   count, From, Reply-To, subject, HTML SHA-256, and confirmation phrase.
+- `INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1` makes both guarded send apply tools
+  refuse before the final Interspire send form unless `oci_ledger_preflight`
+  verifies the expected Interspire campaign/batch row count in the configured
+  private ledger. The preflight `campaign_id` must equal the Interspire
+  `campaign_id` in the send request.
+- `INTERSPIRE_OCI_SEND_LEDGER_PATH` is the only ledger file path source. Send
+  requests cannot provide a per-call file path.
 - `INTERSPIRE_CONTACT_WRITE_CONTROLS` is reserved for later phases and should
   remain disabled.
 - The public build always requires preview/apply with an exact `plan_id`.

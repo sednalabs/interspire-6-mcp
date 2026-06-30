@@ -43,6 +43,20 @@ pub struct SettingsAuditRequest {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, rmcp::schemars::JsonSchema)]
+pub struct SettingsInventoryRequest {
+    #[serde(default)]
+    pub include_cron: bool,
+    #[serde(default)]
+    pub include_empty: bool,
+    #[serde(default)]
+    pub include_hidden: bool,
+    /// Maximum returned fields per settings section. Defaults to 200 and is capped at 500.
+    #[serde(default = "default_settings_inventory_limit")]
+    #[schemars(range(min = 1, max = 500))]
+    pub max_fields_per_section: usize,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, rmcp::schemars::JsonSchema)]
 pub struct UserSmtpReadbackRequest {
     #[serde(default)]
     pub max_users: Option<usize>,
@@ -84,6 +98,8 @@ pub struct StatusReport {
     pub contact_write_controls_enabled: bool,
     pub send_controls_enabled: bool,
     pub production_send_controls_enabled: bool,
+    pub oci_send_ledger_configured: bool,
+    pub oci_send_ledger_required: bool,
     pub write_execution_mode: WriteExecutionMode,
     pub safe_mode: bool,
     pub capabilities: Vec<String>,
@@ -166,6 +182,32 @@ pub struct SettingsAuditReport {
 pub struct SettingsSection {
     pub name: String,
     pub fields: Vec<RedactedField>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SettingsInventoryReport {
+    pub ok: bool,
+    pub configured: bool,
+    pub sections: Vec<SettingsInventorySection>,
+    pub warnings: Vec<String>,
+    pub evidence: Evidence,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SettingsInventorySection {
+    pub name: String,
+    pub fields: Vec<RedactedField>,
+    pub omitted_fields: Vec<SettingsInventoryOmittedField>,
+    pub total_control_count: usize,
+    pub returned_field_count: usize,
+    pub omitted_field_count: usize,
+    pub capped: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SettingsInventoryOmittedField {
+    pub name: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -253,6 +295,8 @@ impl StatusReport {
             contact_write_controls_enabled: false,
             send_controls_enabled: false,
             production_send_controls_enabled: false,
+            oci_send_ledger_configured: false,
+            oci_send_ledger_required: false,
             write_execution_mode: WriteExecutionMode::PreviewApply,
             safe_mode: true,
             capabilities: vec![
@@ -262,6 +306,7 @@ impl StatusReport {
                 "interspire_contact_state".to_string(),
                 "interspire_list_owner_readback".to_string(),
                 "interspire_settings_audit".to_string(),
+                "interspire_settings_inventory".to_string(),
                 "interspire_admin_session_probe".to_string(),
                 "interspire_user_smtp_readback".to_string(),
                 "interspire_queue_stats_readback".to_string(),
@@ -276,6 +321,8 @@ impl StatusReport {
                 "interspire_production_send_apply".to_string(),
                 "interspire_campaign_template_update_preview".to_string(),
                 "interspire_campaign_template_update_apply".to_string(),
+                "interspire_campaign_template_artifact_update_preview".to_string(),
+                "interspire_campaign_template_artifact_update_apply".to_string(),
                 "interspire_campaign_update_preview".to_string(),
                 "interspire_campaign_update_apply".to_string(),
                 "interspire_list_update_preview".to_string(),
@@ -355,6 +402,41 @@ impl SettingsAuditReport {
                         value: Some("1".to_string()),
                     },
                 ],
+            }],
+            warnings: Vec::new(),
+            evidence: Evidence {
+                source: "fixture".to_string(),
+                notes: vec!["synthetic fixture".to_string()],
+            },
+        }
+    }
+}
+
+impl SettingsInventoryReport {
+    pub fn fixture() -> Self {
+        Self {
+            ok: true,
+            configured: true,
+            sections: vec![SettingsInventorySection {
+                name: "email".to_string(),
+                fields: vec![
+                    RedactedField {
+                        name: "smtp_server".to_string(),
+                        value: Some("[redacted-host]".to_string()),
+                    },
+                    RedactedField {
+                        name: "force_unsublink".to_string(),
+                        value: Some("1".to_string()),
+                    },
+                ],
+                omitted_fields: vec![SettingsInventoryOmittedField {
+                    name: "smtp_password".to_string(),
+                    reason: "secret-shaped field omitted".to_string(),
+                }],
+                total_control_count: 3,
+                returned_field_count: 2,
+                omitted_field_count: 1,
+                capped: false,
             }],
             warnings: Vec::new(),
             evidence: Evidence {
@@ -539,6 +621,10 @@ pub const HARD_LIST_READ_LIMIT: usize = 100;
 
 pub fn default_list_read_limit() -> usize {
     DEFAULT_LIST_READ_LIMIT
+}
+
+pub fn default_settings_inventory_limit() -> usize {
+    200
 }
 
 #[cfg(test)]

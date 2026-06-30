@@ -46,6 +46,7 @@ mod config;
 mod error;
 mod guarded_write;
 mod live;
+mod oci_ledger;
 mod private_artifacts;
 mod redact;
 mod response;
@@ -69,26 +70,28 @@ pub use response::{
     CampaignCopyApplyReport, CampaignCopyApplyRequest, CampaignCopyPreviewReport,
     CampaignCopyPreviewRequest, CampaignReadbackReport, CampaignReadbackRequest,
     CampaignRenderArtifactReport, CampaignRenderArtifactRequest,
+    CampaignTemplateArtifactUpdateApplyReport, CampaignTemplateArtifactUpdateApplyRequest,
+    CampaignTemplateArtifactUpdatePreviewReport, CampaignTemplateArtifactUpdatePreviewRequest,
     CampaignTemplateUpdateApplyRequest, CampaignTemplateUpdatePreviewRequest,
     CampaignUpdateApplyRequest, CampaignUpdatePreviewRequest, ContactImportPreflightReport,
     ContactImportPreflightRequest, ContactStateReport, ContactStateRequest, Evidence,
     FormFieldChange, FormFieldDescriptor, FormFieldUpdate, GuardedWriteApplyReport,
     GuardedWritePreviewReport, ListCreateApplyRequest, ListCreatePreviewRequest,
     ListOwnerReadbackReport, ListOwnerReadbackRequest, ListSummary, ListSummaryReport,
-    ListSummaryRequest, ListUpdateApplyRequest, ListUpdatePreviewRequest,
-    ProductionSendApplyReport, ProductionSendApplyRequest, QueueControlAction,
-    QueueControlApplyReport, QueueControlApplyRequest, QueueControlCandidate,
+    ListSummaryRequest, ListUpdateApplyRequest, ListUpdatePreviewRequest, OciLedgerPreflightReport,
+    OciLedgerPreflightRequest, ProductionSendApplyReport, ProductionSendApplyRequest,
+    QueueControlAction, QueueControlApplyReport, QueueControlApplyRequest, QueueControlCandidate,
     QueueControlPreviewReport, QueueControlPreviewRequest, QueueStatsReadbackReport,
     QueueStatsReadbackRequest, RenderArtifact, SeedReadinessGate, SeedReadinessGateReport,
     SeedReadinessGateRequest, SeedSendApplyReport, SeedSendApplyRequest, SendApplyStatus,
     SendReconciliationReport, SendWizardReadbackReport, SendWizardReadbackRequest,
     SensitiveFieldDenial, SensitiveFieldQueryReport, SensitiveFieldQueryRequest,
     SensitiveFieldTarget, SensitiveFieldValue, SensitiveToolMetadata, SettingsAuditReport,
-    SettingsAuditRequest, SettingsSectionName, SettingsUpdateApplyRequest,
-    SettingsUpdatePreviewRequest, StatusReport, StatusRequest, UserSmtpReadbackReport,
-    UserSmtpReadbackRequest, UserUpdateApplyRequest, UserUpdatePreviewRequest,
-    WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest, XmlAuthProbeReport,
-    XmlAuthProbeRequest, DEFAULT_HYGIENE_QUERY_BUDGET, DEFAULT_LIST_READ_LIMIT,
+    SettingsAuditRequest, SettingsInventoryReport, SettingsInventoryRequest, SettingsSectionName,
+    SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport, StatusRequest,
+    UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
+    UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
+    XmlAuthProbeReport, XmlAuthProbeRequest, DEFAULT_HYGIENE_QUERY_BUDGET, DEFAULT_LIST_READ_LIMIT,
     HARD_HYGIENE_QUERY_BUDGET, HARD_LIST_READ_LIMIT,
 };
 use rmcp::{
@@ -155,6 +158,10 @@ pub trait InterspireReadBackend: Send + Sync {
         &self,
         request: &SettingsAuditRequest,
     ) -> Result<SettingsAuditReport, InterspireError>;
+    fn settings_inventory(
+        &self,
+        request: &SettingsInventoryRequest,
+    ) -> Result<SettingsInventoryReport, InterspireError>;
     fn admin_session_probe(
         &self,
         request: &AdminSessionProbeRequest,
@@ -342,6 +349,13 @@ impl InterspireMcpServer {
                         "Read redacted Interspire global settings for email, bounce, and cron.",
                         ["interspire", "settings", "audit"],
                     )),
+                ToolCapability::new("interspire_settings_inventory")
+                    .with_group("read")
+                    .with_read_only(true)
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Inventory redacted Interspire settings form fields across allowlisted tabs.",
+                        ["interspire", "settings", "inventory", "audit"],
+                    )),
                 ToolCapability::new("interspire_admin_session_probe")
                     .with_group("read")
                     .with_read_only(true)
@@ -422,20 +436,28 @@ impl InterspireMcpServer {
                     .with_group("guarded-send")
                     .with_read_only(false)
                     .with_discovery(ToolDiscoveryMetadata::new(
-                        "Apply one explicitly acknowledged seed send after immediate readiness proof.",
-                        ["interspire", "seed", "send", "apply", "guarded-send"],
+                        "Apply one explicitly acknowledged seed send after immediate readiness proof and optional OCI ledger preflight.",
+                        [
+                            "interspire",
+                            "seed",
+                            "send",
+                            "apply",
+                            "guarded-send",
+                            "oci-ledger",
+                        ],
                     )),
                 ToolCapability::new("interspire_production_send_apply")
                     .with_group("guarded-send")
                     .with_read_only(false)
                     .with_discovery(ToolDiscoveryMetadata::new(
-                        "Apply an explicitly acknowledged production send after strict immediate readiness proof.",
+                        "Apply an explicitly acknowledged production send after strict immediate readiness proof and optional OCI ledger preflight.",
                         [
                             "interspire",
                             "production",
                             "send",
                             "apply",
                             "guarded-send",
+                            "oci-ledger",
                         ],
                     )),
                 ToolCapability::new("interspire_campaign_template_update_preview")
@@ -451,6 +473,20 @@ impl InterspireMcpServer {
                     .with_discovery(ToolDiscoveryMetadata::new(
                         "Apply a previously previewed semantic EDM template edit.",
                         ["interspire", "campaign", "template", "apply", "edm"],
+                    )),
+                ToolCapability::new("interspire_campaign_template_artifact_update_preview")
+                    .with_group("guarded-write")
+                    .with_read_only(true)
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Preview applying a private render artifact to a campaign template without returning raw HTML.",
+                        ["interspire", "campaign", "template", "artifact", "preview"],
+                    )),
+                ToolCapability::new("interspire_campaign_template_artifact_update_apply")
+                    .with_group("guarded-write")
+                    .with_read_only(false)
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Apply a previously previewed private render artifact to a campaign template and prove the persisted body hash.",
+                        ["interspire", "campaign", "template", "artifact", "apply"],
                     )),
                 ToolCapability::new("interspire_campaign_update_preview")
                     .with_group("guarded-write")
@@ -606,6 +642,234 @@ impl InterspireMcpServer {
     pub fn inventory(&self) -> &ToolInventory {
         &self.inventory
     }
+
+    fn campaign_template_artifact_update_preview(
+        &self,
+        request: &CampaignTemplateArtifactUpdatePreviewRequest,
+    ) -> Result<CampaignTemplateArtifactUpdatePreviewReport, InterspireError> {
+        let artifact_input = read_template_artifacts_for_preview(request)?;
+        let mut guarded_preview =
+            self.backend
+                .campaign_update_preview(&CampaignUpdatePreviewRequest {
+                    campaign_id: request.campaign_id,
+                    updates: request.updates_with_bodies(
+                        &artifact_input.html.contents,
+                        artifact_input
+                            .text
+                            .as_ref()
+                            .map(|artifact| artifact.contents.as_str()),
+                    ),
+                })?;
+        scrub_template_body_preview_report(&mut guarded_preview);
+
+        Ok(CampaignTemplateArtifactUpdatePreviewReport {
+            ok: guarded_preview.ok,
+            configured: guarded_preview.configured,
+            campaign_id: request.campaign_id,
+            artifacts: artifact_input.summaries,
+            guarded_preview,
+            production_send_authorized: false,
+            warnings: vec![
+                "preview only; raw artifact contents were read privately and are not returned"
+                    .to_string(),
+                "this tool does not send, schedule, import contacts, or authorize production mail"
+                    .to_string(),
+            ],
+            evidence: response::Evidence {
+                source: "private_render_artifact+interspire_admin_html".to_string(),
+                notes: vec![
+                    "fixed private render artifact read".to_string(),
+                    "guarded campaign template update preview".to_string(),
+                ],
+            },
+        })
+    }
+
+    fn campaign_template_artifact_update_apply(
+        &self,
+        request: &CampaignTemplateArtifactUpdateApplyRequest,
+    ) -> Result<CampaignTemplateArtifactUpdateApplyReport, InterspireError> {
+        let artifact_input = read_template_artifacts_for_apply(request)?;
+        let mut guarded_apply =
+            self.backend
+                .campaign_update_apply(&CampaignUpdateApplyRequest {
+                    campaign_id: request.campaign_id,
+                    plan_id: request.plan_id.clone(),
+                    updates: request.updates_with_bodies(
+                        &artifact_input.html.contents,
+                        artifact_input
+                            .text
+                            .as_ref()
+                            .map(|artifact| artifact.contents.as_str()),
+                    ),
+                })?;
+        scrub_template_body_apply_report(&mut guarded_apply);
+        let campaign_body = self
+            .backend
+            .campaign_body_audit(&CampaignBodyAuditRequest {
+                campaign_id: request.campaign_id,
+            })?;
+        if campaign_body.html_sha256.as_deref() != Some(artifact_input.html.sha256.as_str()) {
+            return Err(InterspireError::Safety(
+                "campaign template artifact apply did not persist the expected HTML SHA-256"
+                    .to_string(),
+            ));
+        }
+        if let Some(text_artifact) = artifact_input.text.as_ref() {
+            if campaign_body.text_sha256.as_deref() != Some(text_artifact.sha256.as_str()) {
+                return Err(InterspireError::Safety(
+                    "campaign template artifact apply did not persist the expected text SHA-256"
+                        .to_string(),
+                ));
+            }
+        }
+
+        Ok(CampaignTemplateArtifactUpdateApplyReport {
+            ok: guarded_apply.ok && campaign_body.ok,
+            configured: guarded_apply.configured,
+            campaign_id: request.campaign_id,
+            artifacts: artifact_input.summaries,
+            guarded_apply,
+            campaign_body,
+            production_send_authorized: false,
+            warnings: vec![
+                "guarded artifact template apply completed; this did not send, schedule, import contacts, or authorize production mail".to_string(),
+            ],
+            evidence: response::Evidence {
+                source: "private_render_artifact+interspire_admin_html".to_string(),
+                notes: vec![
+                    "fixed private render artifact read".to_string(),
+                    "guarded campaign template update apply".to_string(),
+                    "post-apply campaign body audit matched artifact hash".to_string(),
+                ],
+            },
+        })
+    }
+}
+
+struct TemplateArtifactInput {
+    html: private_artifacts::PrivateTextArtifact,
+    text: Option<private_artifacts::PrivateTextArtifact>,
+    summaries: Vec<response::TemplateArtifactSummary>,
+}
+
+fn read_template_artifacts_for_preview(
+    request: &CampaignTemplateArtifactUpdatePreviewRequest,
+) -> Result<TemplateArtifactInput, InterspireError> {
+    read_template_artifacts(
+        &request.html_artifact_path,
+        request.expected_html_sha256.as_deref(),
+        request.expected_html_bytes,
+        request.text_artifact_path.as_deref(),
+        request.expected_text_sha256.as_deref(),
+        request.expected_text_bytes,
+    )
+}
+
+fn read_template_artifacts_for_apply(
+    request: &CampaignTemplateArtifactUpdateApplyRequest,
+) -> Result<TemplateArtifactInput, InterspireError> {
+    read_template_artifacts(
+        &request.html_artifact_path,
+        request.expected_html_sha256.as_deref(),
+        request.expected_html_bytes,
+        request.text_artifact_path.as_deref(),
+        request.expected_text_sha256.as_deref(),
+        request.expected_text_bytes,
+    )
+}
+
+fn read_template_artifacts(
+    html_artifact_path: &str,
+    expected_html_sha256: Option<&str>,
+    expected_html_bytes: Option<u64>,
+    text_artifact_path: Option<&str>,
+    expected_text_sha256: Option<&str>,
+    expected_text_bytes: Option<u64>,
+) -> Result<TemplateArtifactInput, InterspireError> {
+    let html = private_artifacts::read_private_render_text_artifact(
+        html_artifact_path,
+        "HTML template artifact",
+        expected_html_sha256,
+        expected_html_bytes,
+    )?;
+    if html.contents.trim().is_empty() {
+        return Err(InterspireError::Safety(
+            "HTML template artifact must not be empty".to_string(),
+        ));
+    }
+    let text = text_artifact_path
+        .filter(|value| !value.trim().is_empty())
+        .map(|path| {
+            private_artifacts::read_private_render_text_artifact(
+                path,
+                "text template artifact",
+                expected_text_sha256,
+                expected_text_bytes,
+            )
+        })
+        .transpose()?;
+
+    let mut summaries = vec![template_artifact_summary("html", &html)];
+    if let Some(text_artifact) = text.as_ref() {
+        summaries.push(template_artifact_summary("text", text_artifact));
+    }
+
+    Ok(TemplateArtifactInput {
+        html,
+        text,
+        summaries,
+    })
+}
+
+fn template_artifact_summary(
+    kind: &str,
+    artifact: &private_artifacts::PrivateTextArtifact,
+) -> response::TemplateArtifactSummary {
+    response::TemplateArtifactSummary {
+        kind: kind.to_string(),
+        file_name: artifact.file_name.clone(),
+        bytes: artifact.bytes,
+        sha256: artifact.sha256.clone(),
+    }
+}
+
+fn scrub_template_body_preview_report(report: &mut GuardedWritePreviewReport) {
+    for change in &mut report.changes {
+        scrub_template_body_change(change);
+    }
+}
+
+fn scrub_template_body_apply_report(report: &mut GuardedWriteApplyReport) {
+    for change in &mut report.changes {
+        scrub_template_body_change(change);
+    }
+    for field in &mut report.post_apply_fields {
+        if is_template_body_field_name(&field.name) {
+            field.value =
+                Some("[private template body redacted; see artifact summary]".to_string());
+        }
+    }
+}
+
+fn scrub_template_body_change(change: &mut FormFieldChange) {
+    if is_template_body_field_name(&change.name) {
+        change.current_value =
+            Some("[private template body redacted; see artifact summary]".to_string());
+        change.requested_value =
+            Some("[private template body redacted; see artifact summary]".to_string());
+    }
+}
+
+fn is_template_body_field_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains("html")
+        || lower.contains("body")
+        || lower.contains("content")
+        || lower.contains("mydeveditcontrol")
+        || lower == "text_body"
+        || lower == "textbody"
+        || lower == "textcontents"
 }
 
 #[tool_router]
@@ -657,6 +921,16 @@ impl InterspireMcpServer {
         Parameters(request): Parameters<SettingsAuditRequest>,
     ) -> String {
         response::tool_json(self.backend.settings_audit(&request))
+    }
+
+    #[tool(
+        description = "Inventory redacted Interspire settings form fields across allowlisted tabs."
+    )]
+    fn interspire_settings_inventory(
+        &self,
+        Parameters(request): Parameters<SettingsInventoryRequest>,
+    ) -> String {
+        response::tool_json(self.backend.settings_inventory(&request))
     }
 
     #[tool(
@@ -752,7 +1026,7 @@ impl InterspireMcpServer {
     }
 
     #[tool(
-        description = "Apply one explicitly acknowledged seed send after immediate readiness proof. Requires INTERSPIRE_GUARDED_WRITES=1, INTERSPIRE_SEND_CONTROLS=1, acknowledge_seed_send=true, and a bounded expected recipient count."
+        description = "Apply one explicitly acknowledged seed send after immediate readiness proof. Requires INTERSPIRE_GUARDED_WRITES=1, INTERSPIRE_SEND_CONTROLS=1, acknowledge_seed_send=true, and a bounded expected recipient count; when INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1, also requires verified OCI ledger preflight."
     )]
     fn interspire_seed_send_apply(
         &self,
@@ -762,7 +1036,7 @@ impl InterspireMcpServer {
     }
 
     #[tool(
-        description = "Apply an explicitly acknowledged production send after strict immediate readiness proof. Requires guarded writes, send controls, production send controls, exact expected count, From, Reply-To, subject, HTML SHA-256, and the required confirmation phrase."
+        description = "Apply an explicitly acknowledged production send after strict immediate readiness proof. Requires guarded writes, send controls, production send controls, exact expected count, From, Reply-To, subject, HTML SHA-256, and the required confirmation phrase; when INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1, also requires verified OCI ledger preflight."
     )]
     fn interspire_production_send_apply(
         &self,
@@ -801,6 +1075,26 @@ impl InterspireMcpServer {
                     updates,
                 }),
         )
+    }
+
+    #[tool(
+        description = "Preview applying a fixed private render artifact to a campaign template without returning raw HTML."
+    )]
+    fn interspire_campaign_template_artifact_update_preview(
+        &self,
+        Parameters(request): Parameters<CampaignTemplateArtifactUpdatePreviewRequest>,
+    ) -> String {
+        response::tool_json(self.campaign_template_artifact_update_preview(&request))
+    }
+
+    #[tool(
+        description = "Apply a fixed private render artifact to a campaign template and prove the persisted body hash."
+    )]
+    fn interspire_campaign_template_artifact_update_apply(
+        &self,
+        Parameters(request): Parameters<CampaignTemplateArtifactUpdateApplyRequest>,
+    ) -> String {
+        response::tool_json(self.campaign_template_artifact_update_apply(&request))
     }
 
     #[tool(description = "Preview guarded campaign content or sender metadata edits.")]
@@ -1080,6 +1374,20 @@ fn with_interspire_tool_metadata(tool: Tool) -> Tool {
                 .idempotent(false)
                 .open_world(false),
         ),
+        "interspire_campaign_template_artifact_update_preview" => tool.with_annotations(
+            ToolAnnotations::with_title("Campaign template artifact update preview")
+                .read_only(true)
+                .destructive(false)
+                .idempotent(false)
+                .open_world(false),
+        ),
+        "interspire_campaign_template_artifact_update_apply" => tool.with_annotations(
+            ToolAnnotations::with_title("Campaign template artifact update apply")
+                .read_only(false)
+                .destructive(false)
+                .idempotent(false)
+                .open_world(false),
+        ),
         _ => tool,
     }
 }
@@ -1088,9 +1396,14 @@ fn with_interspire_tool_metadata(tool: Tool) -> Tool {
 mod tests {
     use super::*;
     use mcp_toolkit_core::tool_inventory::{ToolInventoryPolicy, ToolOperation};
+    use sha2::{Digest, Sha256};
+    use std::{fs, process};
 
-    #[derive(Debug)]
-    struct FixtureBackend;
+    #[derive(Debug, Default)]
+    struct FixtureBackend {
+        campaign_body_html_sha256: Option<String>,
+        campaign_body_text_sha256: Option<String>,
+    }
 
     impl InterspireReadBackend for FixtureBackend {
         fn status(&self, _request: &StatusRequest) -> Result<StatusReport, InterspireError> {
@@ -1130,6 +1443,13 @@ mod tests {
             _request: &SettingsAuditRequest,
         ) -> Result<SettingsAuditReport, InterspireError> {
             Ok(SettingsAuditReport::fixture())
+        }
+
+        fn settings_inventory(
+            &self,
+            _request: &SettingsInventoryRequest,
+        ) -> Result<SettingsInventoryReport, InterspireError> {
+            Ok(SettingsInventoryReport::fixture())
         }
 
         fn admin_session_probe(
@@ -1176,9 +1496,17 @@ mod tests {
 
         fn campaign_body_audit(
             &self,
-            _request: &CampaignBodyAuditRequest,
+            request: &CampaignBodyAuditRequest,
         ) -> Result<CampaignBodyAuditReport, InterspireError> {
-            Ok(CampaignBodyAuditReport::fixture())
+            let mut report = CampaignBodyAuditReport::fixture();
+            report.campaign_id = request.campaign_id;
+            if let Some(sha256) = &self.campaign_body_html_sha256 {
+                report.html_sha256 = Some(sha256.clone());
+            }
+            if let Some(sha256) = &self.campaign_body_text_sha256 {
+                report.text_sha256 = Some(sha256.clone());
+            }
+            Ok(report)
         }
 
         fn campaign_render_artifact(
@@ -1392,7 +1720,7 @@ mod tests {
 
     #[test]
     fn inventory_matches_exported_tool_names() {
-        let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend))
+        let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend::default()))
             .unwrap_or_else(|err| panic!("server inventory must build: {err}"));
         let tools = server.tool_schema_snapshot();
         let names = tools
@@ -1412,6 +1740,8 @@ mod tests {
                 "interspire_campaign_copy_preview",
                 "interspire_campaign_readback",
                 "interspire_campaign_render_artifact",
+                "interspire_campaign_template_artifact_update_apply",
+                "interspire_campaign_template_artifact_update_preview",
                 "interspire_campaign_template_update_apply",
                 "interspire_campaign_template_update_preview",
                 "interspire_campaign_update_apply",
@@ -1433,6 +1763,7 @@ mod tests {
                 "interspire_send_wizard_readback",
                 "interspire_sensitive_field_query",
                 "interspire_settings_audit",
+                "interspire_settings_inventory",
                 "interspire_settings_update_apply",
                 "interspire_settings_update_preview",
                 "interspire_status",
@@ -1457,7 +1788,7 @@ mod tests {
 
     #[test]
     fn sensitive_tool_descriptor_is_marked_approval_required() {
-        let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend))
+        let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend::default()))
             .unwrap_or_else(|err| panic!("server inventory must build: {err}"));
         let tool = server
             .tool_schema_snapshot()
@@ -1483,7 +1814,7 @@ mod tests {
 
     #[test]
     fn no_mutation_proof_descriptors_mark_the_proof_boundary() {
-        let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend))
+        let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend::default()))
             .unwrap_or_else(|err| panic!("server inventory must build: {err}"));
         let tools = server.tool_schema_snapshot();
 
@@ -1517,5 +1848,139 @@ mod tests {
                 Some(true)
             );
         }
+    }
+
+    #[test]
+    fn template_artifact_preview_does_not_return_raw_private_body() {
+        let (path, sha256, bytes) = write_private_template_artifact(
+            "preview-redaction",
+            "<html><body>PRIVATE-NEWSLETTER-SENTINEL</body></html>",
+        );
+        let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend::default()))
+            .unwrap_or_else(|err| panic!("server inventory must build: {err}"));
+
+        let report = server
+            .campaign_template_artifact_update_preview(
+                &CampaignTemplateArtifactUpdatePreviewRequest {
+                    campaign_id: 88,
+                    html_artifact_path: path.to_string_lossy().to_string(),
+                    expected_html_sha256: Some(sha256.clone()),
+                    expected_html_bytes: Some(bytes),
+                    text_artifact_path: None,
+                    expected_text_sha256: None,
+                    expected_text_bytes: None,
+                    name: Some("Example Update draft".to_string()),
+                    subject: Some("Example Update subject".to_string()),
+                    send_multipart: Some(false),
+                    track_opens: Some(true),
+                    track_links: Some(true),
+                    embed_images: Some(false),
+                },
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+        let serialized = serde_json::to_string(&report).unwrap_or_else(|err| panic!("json: {err}"));
+
+        assert!(report.ok);
+        assert_eq!(report.artifacts[0].sha256, sha256);
+        assert_eq!(report.artifacts[0].bytes, bytes);
+        assert!(!serialized.contains("PRIVATE-NEWSLETTER-SENTINEL"));
+        assert!(!serialized.contains("<html>"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn template_artifact_apply_proves_hash_and_redacts_private_body() {
+        let (path, sha256, bytes) = write_private_template_artifact(
+            "apply-redaction",
+            "<html><body>PRIVATE-NEWSLETTER-APPLY-SENTINEL</body></html>",
+        );
+        let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend {
+            campaign_body_html_sha256: Some(sha256.clone()),
+            campaign_body_text_sha256: None,
+        }))
+        .unwrap_or_else(|err| panic!("server inventory must build: {err}"));
+
+        let report = server
+            .campaign_template_artifact_update_apply(&CampaignTemplateArtifactUpdateApplyRequest {
+                campaign_id: 88,
+                plan_id: "ifw_000000000000000000000000".to_string(),
+                html_artifact_path: path.to_string_lossy().to_string(),
+                expected_html_sha256: Some(sha256.clone()),
+                expected_html_bytes: Some(bytes),
+                text_artifact_path: None,
+                expected_text_sha256: None,
+                expected_text_bytes: None,
+                name: Some("Example Update draft".to_string()),
+                subject: Some("Example Update subject".to_string()),
+                send_multipart: Some(false),
+                track_opens: Some(true),
+                track_links: Some(true),
+                embed_images: Some(false),
+            })
+            .unwrap_or_else(|err| panic!("{err}"));
+        let serialized = serde_json::to_string(&report).unwrap_or_else(|err| panic!("json: {err}"));
+
+        assert!(report.ok);
+        assert_eq!(
+            report.campaign_body.html_sha256.as_deref(),
+            Some(sha256.as_str())
+        );
+        assert!(!serialized.contains("PRIVATE-NEWSLETTER-APPLY-SENTINEL"));
+        assert!(!serialized.contains("<html>"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn template_artifact_apply_refuses_unproven_persisted_hash() {
+        let (path, sha256, bytes) = write_private_template_artifact(
+            "apply-hash-mismatch",
+            "<html><body>PRIVATE-NEWSLETTER-MISMATCH-SENTINEL</body></html>",
+        );
+        let server = InterspireMcpServer::with_backend(Arc::new(FixtureBackend::default()))
+            .unwrap_or_else(|err| panic!("server inventory must build: {err}"));
+
+        let err = server
+            .campaign_template_artifact_update_apply(&CampaignTemplateArtifactUpdateApplyRequest {
+                campaign_id: 88,
+                plan_id: "ifw_000000000000000000000000".to_string(),
+                html_artifact_path: path.to_string_lossy().to_string(),
+                expected_html_sha256: Some(sha256),
+                expected_html_bytes: Some(bytes),
+                text_artifact_path: None,
+                expected_text_sha256: None,
+                expected_text_bytes: None,
+                name: None,
+                subject: None,
+                send_multipart: Some(false),
+                track_opens: None,
+                track_links: None,
+                embed_images: None,
+            })
+            .err()
+            .unwrap_or_else(|| panic!("hash mismatch must fail"));
+
+        assert!(err
+            .to_string()
+            .contains("did not persist the expected HTML SHA-256"));
+
+        let _ = fs::remove_file(path);
+    }
+
+    fn write_private_template_artifact(
+        name: &str,
+        contents: &str,
+    ) -> (std::path::PathBuf, String, u64) {
+        let dir = private_artifacts::prepare_private_render_output_dir(None)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let path = dir.join(format!(
+            "interspire-campaign-render-test-{}-{name}.html",
+            process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        fs::write(&path, contents).unwrap_or_else(|err| panic!("{err}"));
+        let sha256 = hex::encode(Sha256::digest(contents.as_bytes()));
+        (path, sha256, contents.len() as u64)
     }
 }

@@ -240,6 +240,12 @@ guarded writes:
   posting the final send form and additionally requires production send runtime
   enablement plus exact expected recipient count, From, Reply-To, subject, HTML
   SHA-256, and the required confirmation phrase.
+- When `INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1`, both guarded send apply tools
+  also require `oci_ledger_preflight` to match the expected campaign/batch row
+  count in the configured private OCI send ledger before the final send form is
+  posted. The preflight `campaign_id` must equal the Interspire campaign id in
+  the send request. The ledger path is environment-configured only; tool callers
+  cannot supply arbitrary file paths.
 
 The wizard proof records Schedule and Stats rows before and after the Step2
 render. Output includes invariant evidence and explicit negative flags such as
@@ -251,6 +257,12 @@ surface. They do not accept arbitrary admin URLs, do not schedule mail, and do
 not trigger cron. They post only the final Send-page form captured from the
 freshly proven wizard page, and only when the relevant runtime controls are
 enabled.
+
+OCI ledger preflight is not delivery proof. It proves only that a private local
+send ledger already contains the expected Interspire campaign/batch rows before
+the Interspire final send boundary. Provider acceptance, bounces, complaints,
+suppression reconciliation, and recipient rendering still require OCI and
+recipient-side readback after an explicitly approved send.
 
 Posting the final form is not considered proof of a send. Apply responses carry
 a post-send reconciliation object with the explicit status vocabulary

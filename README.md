@@ -98,6 +98,7 @@ than proprietary Interspire source snippets.
 | `interspire_contact_import_preflight` | Read | Preflight a local cleaned CSV candidate with aggregate counts and SHA-256 only; no contacts are imported. |
 | `interspire_list_owner_readback` | Read | Read list owner, reply-to, and bounce metadata. |
 | `interspire_settings_audit` | Read | Read redacted global email, bounce, and cron settings. |
+| `interspire_settings_inventory` | Read | Inventory redacted settings form fields across allowlisted tabs, with capped omitted secret/hidden/blank controls reported by name and reason. |
 | `interspire_admin_session_probe` | Read | Probe authenticated admin reachability through allowlisted read pages. |
 | `interspire_user_smtp_readback` | Read | Read redacted per-user SMTP override state. |
 | `interspire_queue_stats_readback` | Read | Read scheduled queue and stats rows without triggering cron. |
@@ -114,6 +115,8 @@ than proprietary Interspire source snippets.
 | `interspire_production_send_apply` | Guarded send | Apply an explicitly acknowledged production send after strict readiness proof, exact expected count/sender/subject/hash, and production-send runtime gates. |
 | `interspire_campaign_template_update_preview` | Read preview | Preview semantic EDM template edits such as subject, HTML body, text body, and tracking flags. |
 | `interspire_campaign_template_update_apply` | Guarded apply | Apply one previously previewed semantic EDM template edit. |
+| `interspire_campaign_template_artifact_update_preview` | Read preview | Preview applying a fixed private render artifact to a draft campaign without returning raw HTML. |
+| `interspire_campaign_template_artifact_update_apply` | Guarded apply | Apply one previously previewed fixed private render artifact and prove the persisted body hash. |
 | `interspire_campaign_update_preview` | Read preview | Preview guarded campaign content or sender-metadata edits. |
 | `interspire_campaign_update_apply` | Guarded apply | Apply one previously previewed campaign edit when guarded form-write gates are enabled. |
 | `interspire_list_update_preview` | Read preview | Preview guarded list metadata edits. |
@@ -388,6 +391,16 @@ paths, hashes, byte counts, and a native-browser next step; it does not return
 raw campaign HTML. Visual signoff still requires opening the preview artifact
 with a browser and inspecting desktop/mobile screenshots.
 
+`interspire_campaign_template_artifact_update_preview` and
+`interspire_campaign_template_artifact_update_apply` transfer campaign HTML from
+that fixed private render-artifact directory into another draft without placing
+the raw HTML in the MCP transcript. Preview reads the artifact privately,
+verifies optional expected byte and SHA-256 values, and returns only the
+filename, hash, byte count, and guarded write preview. Apply repeats the
+artifact read, saves through the guarded campaign edit surface, and fails unless
+the post-apply body audit matches the artifact hash. These tools do not send,
+schedule, import contacts, or authorize production mail.
+
 Render artifacts require a private output root:
 
 ```bash
@@ -409,6 +422,10 @@ posting the final send form captured from the live Interspire page.
 - `INTERSPIRE_SEND_CONTROLS=1`
 - `acknowledge_seed_send=true`
 - an explicit list id set and `expected_recipient_count` from 1 to 20
+- when `INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1`, an `oci_ledger_preflight`
+  object whose `campaign_id` matches the Interspire campaign being sent and
+  whose batch id, sender domain, and expected row count match rows already
+  present in the configured private OCI send ledger.
 
 `interspire_production_send_apply` is the full-send boundary. It requires:
 
@@ -419,6 +436,9 @@ posting the final send form captured from the live Interspire page.
 - `confirmation_phrase="SEND_PRODUCTION_CAMPAIGN"`
 - exact expected recipient count, From email, Reply-To email, subject, and
   campaign HTML SHA-256
+- when `INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1`, a verified
+  `oci_ledger_preflight` object, with `campaign_id` equal to the Interspire
+  campaign id, before the final Interspire send form is posted.
 
 Both tools return redacted aggregate evidence plus a post-send reconciliation
 object. HTTP success from the final form post is reported only as `posted`.
@@ -428,6 +448,12 @@ Schedule and Stats, and classify the result as `posted`, `queued`, `processed`,
 `sent` boolean is true only when reconciliation reaches a terminal success
 state. Production sending should still be paired with provider-side monitoring
 and an Ops work item reference.
+
+The OCI ledger path is configured only by `INTERSPIRE_OCI_SEND_LEDGER_PATH`.
+Send requests cannot choose arbitrary ledger files, and the preflight campaign
+token must match the Interspire campaign id in the send request. Ledger
+preflight output returns hashes and counts only; it does not return raw
+recipients, raw campaign identifiers, private file paths, or provider payloads.
 
 ### No-Mutation Send Proof
 
