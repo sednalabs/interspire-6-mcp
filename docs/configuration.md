@@ -19,8 +19,12 @@ surfaces that emit JavaScript CSRF tokens.
 Supported secret file:
 
 ```bash
-INTERSPIRE_XML_CREDENTIALS_FILE=/secure/secrets/interspire-xml.env
+INTERSPIRE_XML_CREDENTIALS_FILE=interspire-xml.env
 ```
+
+Credential-file values are file names only. The MCP reads them from the
+host-controlled `/run/secrets/interspire-mcp/` directory and ignores absolute
+paths, nested paths, and traversal paths.
 
 The XML secret file supports:
 
@@ -55,8 +59,12 @@ INTERSPIRE_HTML_LIST_ENRICH_LIMIT=25
 Supported secret file:
 
 ```bash
-INTERSPIRE_ADMIN_CREDENTIALS_FILE=/secure/secrets/interspire-admin.env
+INTERSPIRE_ADMIN_CREDENTIALS_FILE=interspire-admin.env
 ```
+
+Credential-file values are file names only. The MCP reads them from the
+host-controlled `/run/secrets/interspire-mcp/` directory and ignores absolute
+paths, nested paths, and traversal paths.
 
 The admin secret file supports key/value format:
 
@@ -78,8 +86,12 @@ service token through environment variables or a private secret file:
 ```bash
 INTERSPIRE_CF_ACCESS_CLIENT_ID='service-token-client-id'
 INTERSPIRE_CF_ACCESS_CLIENT_SECRET='redacted-service-token-secret'
-INTERSPIRE_CF_ACCESS_CREDENTIALS_FILE=/secure/secrets/interspire-cloudflare-access.env
+INTERSPIRE_CF_ACCESS_CREDENTIALS_FILE=interspire-cloudflare-access.env
 ```
+
+Credential-file values are file names only. The MCP reads them from the
+host-controlled `/run/secrets/interspire-mcp/` directory and ignores absolute
+paths, nested paths, and traversal paths.
 
 The Access secret file supports:
 

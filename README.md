@@ -241,16 +241,20 @@ INTERSPIRE_HTML_LIST_ENRICH_LIMIT=25
 Secret-file variables:
 
 ```bash
-INTERSPIRE_XML_CREDENTIALS_FILE=/secure/secrets/interspire-xml.env
-INTERSPIRE_ADMIN_CREDENTIALS_FILE=/secure/secrets/interspire-admin.env
+INTERSPIRE_XML_CREDENTIALS_FILE=interspire-xml.env
+INTERSPIRE_ADMIN_CREDENTIALS_FILE=interspire-admin.env
 ```
+
+Credential-file values are file names only. The MCP reads them from
+`/run/secrets/interspire-mcp/`; absolute paths, nested paths, and traversal
+paths are ignored.
 
 Cloudflare Access service-token variables for protected admin/XML origins:
 
 ```bash
 INTERSPIRE_CF_ACCESS_CLIENT_ID='service-token-client-id'
 INTERSPIRE_CF_ACCESS_CLIENT_SECRET='redacted-service-token-secret'
-INTERSPIRE_CF_ACCESS_CREDENTIALS_FILE=/secure/secrets/interspire-cloudflare-access.env
+INTERSPIRE_CF_ACCESS_CREDENTIALS_FILE=interspire-cloudflare-access.env
 ```
 
 When both Access values are configured, the MCP attaches
