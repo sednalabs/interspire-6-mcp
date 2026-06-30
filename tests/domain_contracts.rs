@@ -27,7 +27,7 @@ use interspire_mcp::{
 use mcp_toolkit_testing::response_safety_contract::{
     assert_json_bool_field_false, assert_payload_excludes_substrings,
 };
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 #[derive(Debug)]
 struct ContractBackend;
@@ -462,6 +462,12 @@ fn status_contract_is_redacted_and_read_only() {
         .contains(&"interspire_campaign_render_artifact".to_string()));
     assert!(report
         .capabilities
+        .contains(&"interspire_campaign_test_send_preview".to_string()));
+    assert!(report
+        .capabilities
+        .contains(&"interspire_campaign_test_send_apply".to_string()));
+    assert!(report
+        .capabilities
         .contains(&"interspire_send_wizard_readback".to_string()));
     assert!(report
         .capabilities
@@ -502,6 +508,23 @@ fn status_contract_is_redacted_and_read_only() {
     assert!(!report.guarded_writes_enabled);
     assert!(!report.import_preflight_configured);
     assert!(!report.queue_controls_enabled);
+}
+
+#[test]
+fn status_capabilities_match_router_tool_names() {
+    let server = InterspireMcpServer::with_backend(Arc::new(ContractBackend))
+        .unwrap_or_else(|err| panic!("{err}"));
+    let router_names = server
+        .tool_schema_snapshot()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect::<BTreeSet<_>>();
+    let status_names = StatusReport::fixture()
+        .capabilities
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(status_names, router_names);
 }
 
 #[test]
@@ -807,6 +830,38 @@ fn campaign_test_send_preview_contract_is_no_send_and_warns_about_limitations() 
 }
 
 #[test]
+fn campaign_test_send_apply_denial_omits_body_proof() {
+    let report = CampaignTestSendApplyReport::denied(
+        &CampaignTestSendApplyRequest {
+            campaign_id: 7,
+            recipient_email: "reviewer@example.invalid".to_string(),
+            from_preview_email: "sender@example.invalid".to_string(),
+            expected_preview_digest:
+                "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            expected_subject: "Launch subject".to_string(),
+            expected_html_sha256:
+                "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            max_queue_rows: Some(25),
+            acknowledge_test_send: false,
+        },
+        "campaign test send refused because acknowledge_test_send was not true",
+    );
+
+    assert!(!report.ok);
+    assert!(!report.sent);
+    assert_eq!(report.campaign_id, 7);
+    assert!(report.campaign_body.is_none());
+    assert_payload_excludes_substrings(
+        &report,
+        &[
+            "synthetic fixture",
+            "\"campaign_body\"",
+            "reviewer@example.invalid",
+        ],
+    );
+}
+
+#[test]
 fn campaign_test_send_apply_contract_is_single_preview_send_only_and_redacted() {
     let report = ContractBackend
         .campaign_test_send_apply(&CampaignTestSendApplyRequest {
@@ -825,6 +880,7 @@ fn campaign_test_send_apply_contract_is_single_preview_send_only_and_redacted() 
 
     assert!(report.ok);
     assert!(report.sent);
+    assert!(report.campaign_body.is_some());
     assert!(report.queue_unchanged);
     assert!(report.stats_unchanged);
     assert_json_bool_field_false(&report, "production_send_authorized");
