@@ -294,9 +294,10 @@ design:
 
 Within that boundary, the public phase does allow non-secret Interspire
 delivery and cron configuration edits such as SMTP host/username/port, bounce
-host/username/IMAP mode, hourly throttle, and cron toggles. It still does not
-expose provider APIs, DNS, password/secret fields, contact mutations,
-suppression mutations, or generic send controls.
+host/username/IMAP mode, hourly throttle, cron toggles, and the Interspire
+test-mode send toggle. It still does not expose provider APIs, DNS,
+password/secret fields, contact mutations, suppression mutations, or generic
+send execution controls.
 
 ### EDM Template And Render Artifacts
 
@@ -346,8 +347,14 @@ posting the final send form captured from the live Interspire page.
 - exact expected recipient count, From email, Reply-To email, subject, and
   campaign HTML SHA-256
 
-Both tools return redacted aggregate evidence. Production sending should still
-be paired with provider-side monitoring and an Ops work item reference.
+Both tools return redacted aggregate evidence plus a post-send reconciliation
+object. HTTP success from the final form post is reported only as `posted`.
+The tools then follow the allowlisted Interspire popup send loop, reread
+Schedule and Stats, and classify the result as `posted`, `queued`, `processed`,
+`transport_failed`, `delivered_unverified`, or `seed_proven`. The legacy
+`sent` boolean is true only when reconciliation reaches a terminal success
+state. Production sending should still be paired with provider-side monitoring
+and an Ops work item reference.
 
 ### No-Mutation Send Proof
 

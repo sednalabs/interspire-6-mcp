@@ -11,13 +11,13 @@ use interspire_mcp::{
     ProductionSendApplyReport, ProductionSendApplyRequest, QueueControlApplyReport,
     QueueControlApplyRequest, QueueControlPreviewReport, QueueControlPreviewRequest,
     QueueStatsReadbackReport, QueueStatsReadbackRequest, SeedReadinessGateReport,
-    SeedReadinessGateRequest, SeedSendApplyReport, SeedSendApplyRequest, SendWizardReadbackReport,
-    SendWizardReadbackRequest, SensitiveFieldQueryReport, SensitiveFieldQueryRequest,
-    SettingsAuditReport, SettingsAuditRequest, SettingsUpdateApplyRequest,
-    SettingsUpdatePreviewRequest, StatusReport, StatusRequest, UserSmtpReadbackReport,
-    UserSmtpReadbackRequest, UserUpdateApplyRequest, UserUpdatePreviewRequest,
-    WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest, DEFAULT_LIST_READ_LIMIT,
-    HARD_LIST_READ_LIMIT,
+    SeedReadinessGateRequest, SeedSendApplyReport, SeedSendApplyRequest, SendApplyStatus,
+    SendWizardReadbackReport, SendWizardReadbackRequest, SensitiveFieldQueryReport,
+    SensitiveFieldQueryRequest, SettingsAuditReport, SettingsAuditRequest,
+    SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport, StatusRequest,
+    UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
+    UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
+    DEFAULT_LIST_READ_LIMIT, HARD_LIST_READ_LIMIT,
 };
 use mcp_toolkit_testing::response_safety_contract::{
     assert_json_bool_field_false, assert_payload_excludes_substrings,
@@ -709,6 +709,7 @@ fn seed_send_apply_contract_is_seed_only_and_redacted() {
 
     assert!(report.ok);
     assert!(report.sent);
+    assert_eq!(report.reconciliation.status, SendApplyStatus::SeedProven);
     assert_eq!(report.recipient_count, Some(1));
     assert_json_bool_field_false(&report, "production_send_authorized");
     assert_payload_excludes_substrings(
@@ -742,6 +743,7 @@ fn production_send_apply_contract_requires_explicit_authorization_and_redacts() 
 
     assert!(report.ok);
     assert!(report.sent);
+    assert_eq!(report.reconciliation.status, SendApplyStatus::Processed);
     assert!(report.production_send_authorized);
     assert_payload_excludes_substrings(
         &report,

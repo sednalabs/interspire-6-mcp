@@ -72,6 +72,7 @@ request/response profile is maintained in
 | `response/template.rs` | Semantic EDM campaign template update request helpers. |
 | `response/seed_send.rs` | Guarded seed-send apply request and report contracts. |
 | `response/production_send.rs` | Guarded production-send apply request and report contracts. |
+| `response/send_outcome.rs` | Shared post-send reconciliation status and aggregate proof contracts. |
 | `response/forms.rs` | Guarded campaign/list/user/settings write request and report contracts. |
 | `response/audience.rs` | Warm-up readiness and audience-hygiene request/report contracts. |
 | `response/send_wizard.rs` | Admin-session, campaign-body, Send wizard, and seed-readiness proof contracts. |

@@ -124,6 +124,23 @@ pub fn ensure_allowed_queue_control_delete_post(
     Ok(url)
 }
 
+pub fn ensure_allowed_queue_control_pause(
+    base_url: &str,
+    relative_path: &str,
+) -> Result<(Url, u64), InterspireError> {
+    let base = Url::parse(base_url)
+        .map_err(|err| InterspireError::Safety(format!("invalid admin base url: {err}")))?;
+    let base = normalize_admin_base(base);
+    let url = base.join(relative_path).map_err(|err| {
+        InterspireError::Safety(format!("invalid queue control pause path: {err}"))
+    })?;
+
+    ensure_admin_base_scope(&base, &url)?;
+    ensure_admin_front_controller_path(&base, &url)?;
+    let job_id = classify_allowed_queue_control_pause(&url)?;
+    Ok((url, job_id))
+}
+
 pub fn ensure_allowed_send_wizard_step2_post(
     base_url: &str,
     relative_path: &str,
@@ -173,6 +190,23 @@ pub fn ensure_allowed_guarded_send_final_post(
     ensure_admin_base_scope(&base, &url)?;
     ensure_admin_front_controller_path(&base, &url)?;
     classify_allowed_guarded_send_final_post(&url)?;
+    Ok(url)
+}
+
+pub fn ensure_allowed_guarded_send_popup(
+    base_url: &str,
+    relative_path: &str,
+) -> Result<Url, InterspireError> {
+    let base = Url::parse(base_url)
+        .map_err(|err| InterspireError::Safety(format!("invalid admin base url: {err}")))?;
+    let base = normalize_admin_base(base);
+    let url = base.join(relative_path).map_err(|err| {
+        InterspireError::Safety(format!("invalid guarded send popup path: {err}"))
+    })?;
+
+    ensure_admin_base_scope(&base, &url)?;
+    ensure_admin_front_controller_path(&base, &url)?;
+    classify_allowed_guarded_send_popup(&url)?;
     Ok(url)
 }
 
@@ -319,7 +353,15 @@ pub fn classify_allowed_send_wizard_step2_post(url: &Url) -> Result<(), Interspi
     ensure_no_duplicate_query_keys(&pairs)?;
     ensure_only_query_keys(
         &pairs,
-        &["Page", "Action", "token", "csrf", "csrf_token", "_token"],
+        &[
+            "Page",
+            "Action",
+            "token",
+            "csrf",
+            "csrfToken",
+            "csrf_token",
+            "_token",
+        ],
     )?;
 
     let page = pairs
@@ -472,6 +514,76 @@ pub fn classify_allowed_guarded_send_final_post(url: &Url) -> Result<(), Intersp
     Ok(())
 }
 
+pub fn classify_allowed_guarded_send_popup(url: &Url) -> Result<(), InterspireError> {
+    if url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .is_none_or(|segment| segment != "index.php")
+    {
+        return Err(InterspireError::Safety(
+            "guarded send popup path is not index.php".to_string(),
+        ));
+    }
+
+    let pairs = url.query_pairs().collect::<Vec<_>>();
+    ensure_no_duplicate_query_keys(&pairs)?;
+    ensure_only_query_keys(
+        &pairs,
+        &[
+            "Page",
+            "Action",
+            "job",
+            "Job",
+            "jobid",
+            "JobID",
+            "id",
+            "sendid",
+            "SendID",
+            "Started",
+            "started",
+            "token",
+            "csrf",
+            "csrfToken",
+            "csrf_token",
+            "_token",
+        ],
+    )?;
+
+    let page = query_value(&pairs, "Page");
+    let action = query_value(&pairs, "Action");
+    if !matches!(page.as_deref(), Some("Send")) {
+        return Err(InterspireError::Safety(
+            "guarded send popup must target the Send page".to_string(),
+        ));
+    }
+    if !matches!(action.as_deref(), Some("Send")) {
+        return Err(InterspireError::Safety(format!(
+            "guarded send popup action is not Send: {action:?}"
+        )));
+    }
+
+    let has_numeric_job = ["job", "jobid", "id", "sendid"].iter().any(|key| {
+        query_value(&pairs, key)
+            .as_deref()
+            .is_some_and(|value| value.parse::<u64>().is_ok())
+    });
+    if !has_numeric_job {
+        return Err(InterspireError::Safety(
+            "guarded send popup route missing numeric job identifier".to_string(),
+        ));
+    }
+    if let Some(started) = query_value(&pairs, "Started").or_else(|| query_value(&pairs, "started"))
+    {
+        if !matches!(started.as_str(), "0" | "1") {
+            return Err(InterspireError::Safety(
+                "guarded send popup Started value is not 0 or 1".to_string(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 pub fn classify_allowed_queue_control(url: &Url) -> Result<QueueControlRoute, InterspireError> {
     if url
         .path_segments()
@@ -559,6 +671,60 @@ pub fn classify_allowed_queue_control_delete_post(url: &Url) -> Result<(), Inter
     }
 
     Ok(())
+}
+
+pub fn classify_allowed_queue_control_pause(url: &Url) -> Result<u64, InterspireError> {
+    if url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .is_none_or(|segment| segment != "index.php")
+    {
+        return Err(InterspireError::Safety(
+            "queue control pause path is not index.php".to_string(),
+        ));
+    }
+
+    let pairs = url.query_pairs().collect::<Vec<_>>();
+    ensure_no_duplicate_query_keys(&pairs)?;
+    ensure_only_query_keys(
+        &pairs,
+        &[
+            "Page",
+            "Action",
+            "id",
+            "job",
+            "Job",
+            "jobid",
+            "JobID",
+            "token",
+            "csrf",
+            "csrfToken",
+            "csrf_token",
+            "_token",
+        ],
+    )?;
+
+    let page = query_value(&pairs, "Page");
+    let action = query_value(&pairs, "Action");
+    if !matches!(page.as_deref(), Some("Schedule")) {
+        return Err(InterspireError::Safety(
+            "queue control pause must target the Schedule page".to_string(),
+        ));
+    }
+    if !matches!(action.as_deref(), Some("Pause")) {
+        return Err(InterspireError::Safety(format!(
+            "queue control pause action is not Pause: {action:?}"
+        )));
+    }
+
+    ["job", "jobid", "id"]
+        .iter()
+        .find_map(|key| query_value(&pairs, key).and_then(|value| value.parse::<u64>().ok()))
+        .ok_or_else(|| {
+            InterspireError::Safety(
+                "queue control pause route missing numeric job identifier".to_string(),
+            )
+        })
 }
 
 pub fn classify_allowed_admin_write(url: &Url) -> Result<AdminWriteRoute, InterspireError> {
@@ -802,6 +968,7 @@ fn ensure_only_queue_control_query_keys(
         "CampaignID",
         "token",
         "csrf",
+        "csrfToken",
         "csrf_token",
         "_token",
     ];
@@ -1251,6 +1418,54 @@ mod tests {
         ] {
             assert!(
                 ensure_allowed_guarded_send_final_post(base_url, path).is_err(),
+                "{path} should be blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_only_guarded_send_popup_routes() {
+        let base_url = "https://example.test/admin/";
+        let popup = ensure_allowed_guarded_send_popup(
+            base_url,
+            "index.php?Page=Send&Action=Send&Job=2&Started=1&csrfToken=abc",
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert!(popup.as_str().contains("Action=Send"));
+
+        for path in [
+            "index.php?Page=Send&Action=Send",
+            "index.php?Page=Send&Action=Step4&Job=2",
+            "index.php?Page=Schedule&Action=Send&Job=2",
+            "index.php?Page=Send&Action=Send&Job=abc",
+            "index.php?Page=Send&Action=Send&Job=2&Started=maybe",
+            "cron/index.php?Page=Send&Action=Send&Job=2",
+        ] {
+            assert!(
+                ensure_allowed_guarded_send_popup(base_url, path).is_err(),
+                "{path} should be blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_only_schedule_pause_preflight_routes() {
+        let base_url = "https://example.test/admin/";
+        let (_, job_id) = ensure_allowed_queue_control_pause(
+            base_url,
+            "index.php?Page=Schedule&Action=Pause&job=42&csrfToken=abc",
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(job_id, 42);
+
+        for path in [
+            "index.php?Page=Schedule&Action=Resume&job=42",
+            "index.php?Page=Schedule&Action=Pause&job=abc",
+            "index.php?Page=Send&Action=Pause&job=42",
+            "cron/index.php?Page=Schedule&Action=Pause&job=42",
+        ] {
+            assert!(
+                ensure_allowed_queue_control_pause(base_url, path).is_err(),
                 "{path} should be blocked"
             );
         }

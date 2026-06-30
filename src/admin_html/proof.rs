@@ -9,16 +9,27 @@ use crate::{
         AdminSessionProbeReport, CampaignBodyAuditReport, CampaignRenderArtifactReport,
         CampaignRenderArtifactRequest, ProductionSendApplyReport, ProductionSendApplyRequest,
         RenderArtifact, SeedReadinessGate, SeedReadinessGateReport, SeedReadinessGateRequest,
-        SeedSendApplyReport, SeedSendApplyRequest, SendWizardReadbackReport,
-        SendWizardReadbackRequest, MAX_SEED_SEND_RECIPIENTS, PRODUCTION_SEND_CONFIRMATION_PHRASE,
+        SeedSendApplyReport, SeedSendApplyRequest, SendApplyStatus, SendReconciliationReport,
+        SendWizardReadbackReport, SendWizardReadbackRequest, MAX_SEED_SEND_RECIPIENTS,
+        PRODUCTION_SEND_CONFIRMATION_PHRASE,
     },
     safety::{self, AdminReadPage},
 };
+use mcp_toolkit_observability::redaction::truncate;
 use reqwest::blocking::RequestBuilder;
 use scraper::{ElementRef, Html, Selector};
 use sha2::{Digest, Sha256};
-use std::{io::Write, path::Path};
+use std::{collections::HashSet, io::Write, path::Path};
 use url::Url;
+
+const MAX_SEND_POPUP_STEPS: usize = 25;
+
+#[derive(Debug, Clone)]
+struct GuardedSendEvidence {
+    status_code: u16,
+    redirected: bool,
+    reconciliation: SendReconciliationReport,
+}
 
 impl AdminHtmlClient {
     pub fn admin_session_probe(
@@ -681,6 +692,7 @@ impl AdminHtmlClient {
                 queue_before.len(),
                 stats_before.len(),
                 stats_before.len(),
+                None,
                 warnings,
             ));
         }
@@ -702,41 +714,26 @@ impl AdminHtmlClient {
                 queue_before.len(),
                 stats_before.len(),
                 stats_before.len(),
+                None,
                 warnings,
             ));
         }
 
-        let (send_url, send_pairs) = guarded_send_final_form_post(
-            self.config.base_url.as_deref().unwrap_or_default(),
-            &final_html,
-        )?;
-        let response = self
-            .proof_post_with_page_context(send_url, &send_pairs, &AdminReadPage::SendStart.path())?
-            .send()
-            .map_err(|err| InterspireError::Http(err.to_string()))?;
-        let status = response.status();
-        let status_code = status.as_u16();
-        let redirected = status.is_redirection();
-        if status.is_success() {
-            let html = response
-                .text()
-                .map_err(|err| InterspireError::Http(err.to_string()))?;
-            if !html.trim().is_empty() {
-                ensure_authenticated_html(&html)?;
-            }
-        } else if !redirected {
-            return Err(InterspireError::Http(format!(
-                "seed send final form returned HTTP {}",
-                status_code
-            )));
-        }
-
-        let queue_after = parse_table_rows(
-            &self.get_allowed(&AdminReadPage::Schedule.path())?,
+        let send_evidence = self.post_guarded_send_and_reconcile(
+            guarded_send_final_form_post(
+                self.config.base_url.as_deref().unwrap_or_default(),
+                &final_html,
+            )?,
+            &queue_before,
+            &stats_before,
+            request.expected_recipient_count,
+            true,
             max_rows,
         )?;
-        let stats_after =
-            parse_table_rows(&self.get_allowed(&AdminReadPage::Stats.path())?, max_rows)?;
+        let sent = matches!(
+            send_evidence.reconciliation.status,
+            SendApplyStatus::SeedProven
+        );
 
         Ok(self.seed_send_report_from_parts(
             request,
@@ -745,17 +742,17 @@ impl AdminHtmlClient {
             readiness.campaign_body,
             send_wizard,
             readiness.gates,
-            true,
-            Some(status_code),
-            redirected,
+            sent,
+            Some(send_evidence.status_code),
+            send_evidence.redirected,
             queue_before.len(),
-            queue_after.len(),
+            send_evidence.reconciliation.queue_rows_after,
             stats_before.len(),
-            stats_after.len(),
+            send_evidence.reconciliation.stats_rows_after,
+            Some(send_evidence.reconciliation),
             vec![
-                "seed send final form was posted after immediate readiness proof".to_string(),
-                "provider delivery and recipient render still require external readback"
-                    .to_string(),
+                "seed send final form was posted after immediate readiness proof and reconciled through the Interspire send loop".to_string(),
+                "provider delivery and recipient render still require external readback".to_string(),
             ],
         ))
     }
@@ -860,6 +857,7 @@ impl AdminHtmlClient {
                 0,
                 0,
                 0,
+                None,
                 warnings,
             ));
         }
@@ -901,6 +899,7 @@ impl AdminHtmlClient {
                 queue_before.len(),
                 stats_before.len(),
                 stats_before.len(),
+                None,
                 warnings,
             ));
         }
@@ -924,41 +923,23 @@ impl AdminHtmlClient {
                 queue_before.len(),
                 stats_before.len(),
                 stats_before.len(),
+                None,
                 warnings,
             ));
         }
 
-        let (send_url, send_pairs) = guarded_send_final_form_post(
-            self.config.base_url.as_deref().unwrap_or_default(),
-            &final_html,
-        )?;
-        let response = self
-            .proof_post_with_page_context(send_url, &send_pairs, &AdminReadPage::SendStart.path())?
-            .send()
-            .map_err(|err| InterspireError::Http(err.to_string()))?;
-        let status = response.status();
-        let status_code = status.as_u16();
-        let redirected = status.is_redirection();
-        if status.is_success() {
-            let html = response
-                .text()
-                .map_err(|err| InterspireError::Http(err.to_string()))?;
-            if !html.trim().is_empty() {
-                ensure_authenticated_html(&html)?;
-            }
-        } else if !redirected {
-            return Err(InterspireError::Http(format!(
-                "production send final form returned HTTP {}",
-                status_code
-            )));
-        }
-
-        let queue_after = parse_table_rows(
-            &self.get_allowed(&AdminReadPage::Schedule.path())?,
+        let send_evidence = self.post_guarded_send_and_reconcile(
+            guarded_send_final_form_post(
+                self.config.base_url.as_deref().unwrap_or_default(),
+                &final_html,
+            )?,
+            &queue_before,
+            &stats_before,
+            request.expected_recipient_count,
+            false,
             max_rows,
         )?;
-        let stats_after =
-            parse_table_rows(&self.get_allowed(&AdminReadPage::Stats.path())?, max_rows)?;
+        let sent = send_evidence.reconciliation.status.terminal_success();
 
         Ok(self.production_send_report_from_parts(
             request,
@@ -968,18 +949,198 @@ impl AdminHtmlClient {
             readiness.campaign_body,
             send_wizard,
             readiness.gates,
-            true,
-            Some(status_code),
-            redirected,
+            sent,
+            Some(send_evidence.status_code),
+            send_evidence.redirected,
             queue_before.len(),
-            queue_after.len(),
+            send_evidence.reconciliation.queue_rows_after,
             stats_before.len(),
-            stats_after.len(),
+            send_evidence.reconciliation.stats_rows_after,
+            Some(send_evidence.reconciliation),
             vec![
-                "production send final form was posted after immediate readiness proof".to_string(),
+                "production send final form was posted after immediate readiness proof and reconciled through the Interspire send loop".to_string(),
                 "provider delivery, bounce rate, and recipient engagement require external monitoring".to_string(),
             ],
         ))
+    }
+
+    fn post_guarded_send_and_reconcile(
+        &self,
+        send_form: (Url, Vec<(String, String)>),
+        queue_before: &[String],
+        stats_before: &[String],
+        expected_recipient_count: u64,
+        seed_send: bool,
+        max_rows: usize,
+    ) -> Result<GuardedSendEvidence, InterspireError> {
+        let (send_url, send_pairs) = send_form;
+        let response = self
+            .proof_post_with_page_context(send_url, &send_pairs, &AdminReadPage::SendStart.path())?
+            .send()
+            .map_err(|err| InterspireError::Http(err.to_string()))?;
+        let status = response.status();
+        let status_code = status.as_u16();
+        let redirected = status.is_redirection();
+        let mut popup_steps = 0usize;
+        let mut job_id = None;
+        let mut smtp_reason = None;
+        let mut popup_notes = Vec::new();
+        let mut seen_popup_urls = HashSet::new();
+        let mut next_popup_url = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|location| {
+                safety::ensure_allowed_guarded_send_popup(
+                    self.config.base_url.as_deref().unwrap_or_default(),
+                    location,
+                )
+                .ok()
+            });
+
+        if status.is_success() {
+            let html = response
+                .text()
+                .map_err(|err| InterspireError::Http(err.to_string()))?;
+            if !html.trim().is_empty() {
+                ensure_authenticated_html(&html)?;
+                smtp_reason = transport_failure_reason(&html);
+                next_popup_url = next_popup_url.or(guarded_send_popup_url(
+                    self.config.base_url.as_deref().unwrap_or_default(),
+                    &html,
+                )?);
+            }
+        } else if !redirected {
+            return Err(InterspireError::Http(format!(
+                "guarded send final form returned HTTP {}",
+                status_code
+            )));
+        }
+
+        while let Some(url) = next_popup_url.take() {
+            if popup_steps >= MAX_SEND_POPUP_STEPS {
+                popup_notes.push("send popup loop stopped at the maximum step guard".to_string());
+                break;
+            }
+            let url_key = url.as_str().to_string();
+            if !seen_popup_urls.insert(url_key) {
+                popup_notes.push("send popup loop stopped after a repeated route".to_string());
+                break;
+            }
+            job_id = job_id.or_else(|| send_popup_job_id(&url));
+            let response = self
+                .with_access_headers(self.http.get(url))
+                .send()
+                .map_err(|err| InterspireError::Http(err.to_string()))?;
+            let popup_status = response.status();
+            let popup_location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|location| {
+                    safety::ensure_allowed_guarded_send_popup(
+                        self.config.base_url.as_deref().unwrap_or_default(),
+                        location,
+                    )
+                    .ok()
+                });
+            if !popup_status.is_success() && !popup_status.is_redirection() {
+                return Err(InterspireError::Http(format!(
+                    "send popup route returned HTTP {}",
+                    popup_status.as_u16()
+                )));
+            }
+            popup_steps += 1;
+            if popup_status.is_redirection() {
+                next_popup_url = popup_location;
+                continue;
+            }
+            let html = response
+                .text()
+                .map_err(|err| InterspireError::Http(err.to_string()))?;
+            if !html.trim().is_empty() {
+                ensure_authenticated_html(&html)?;
+                smtp_reason = smtp_reason.or_else(|| transport_failure_reason(&html));
+                next_popup_url = popup_location.or(guarded_send_popup_url(
+                    self.config.base_url.as_deref().unwrap_or_default(),
+                    &html,
+                )?);
+            }
+        }
+
+        let queue_after = parse_table_rows(
+            &self.get_allowed(&AdminReadPage::Schedule.path())?,
+            max_rows,
+        )?;
+        let stats_after =
+            parse_table_rows(&self.get_allowed(&AdminReadPage::Stats.path())?, max_rows)?;
+        let stats_increased = stats_after.len() > stats_before.len();
+        let queued = queue_after.len() > queue_before.len();
+        let sent_count = if stats_increased || popup_steps > 0 {
+            Some(expected_recipient_count)
+        } else {
+            None
+        };
+        let failed_count = smtp_reason.as_ref().map(|_| expected_recipient_count);
+        let unsent_count = if smtp_reason.is_some() {
+            Some(expected_recipient_count)
+        } else {
+            Some(0).filter(|_| stats_increased || popup_steps > 0)
+        };
+        let mut proof_gaps = Vec::new();
+        let status = if smtp_reason.is_some() {
+            SendApplyStatus::TransportFailed
+        } else if stats_increased && seed_send {
+            proof_gaps.push("provider inbox delivery still requires external readback".to_string());
+            SendApplyStatus::SeedProven
+        } else if stats_increased {
+            proof_gaps.push(
+                "provider delivery, bounces, and complaints require external monitoring"
+                    .to_string(),
+            );
+            SendApplyStatus::Processed
+        } else if queued || popup_steps > 0 {
+            proof_gaps.push("Stats page did not yet show a completed send row".to_string());
+            SendApplyStatus::Queued
+        } else {
+            proof_gaps.push(
+                "final send boundary posted but no popup, queue, or stats processing evidence was found"
+                    .to_string(),
+            );
+            SendApplyStatus::Posted
+        };
+        if job_id.is_none() {
+            proof_gaps
+                .push("Interspire job id was not found in redacted send-loop evidence".to_string());
+        }
+        if stats_increased {
+            popup_notes.push("Stats row count increased after guarded send loop".to_string());
+        }
+        if queued {
+            popup_notes.push("Schedule row count increased after guarded send loop".to_string());
+        }
+
+        Ok(GuardedSendEvidence {
+            status_code,
+            redirected,
+            reconciliation: SendReconciliationReport::new(
+                status,
+                job_id,
+                None,
+                None,
+                sent_count,
+                failed_count,
+                unsent_count,
+                smtp_reason,
+                popup_steps,
+                queue_before.len(),
+                queue_after.len(),
+                stats_before.len(),
+                stats_after.len(),
+                proof_gaps,
+                popup_notes,
+            ),
+        })
     }
 
     fn proof_post_with_page_context(
@@ -1176,6 +1337,7 @@ impl AdminHtmlClient {
             queue_rows_after,
             stats_rows_before,
             stats_rows_after,
+            None,
             warnings,
         )
     }
@@ -1196,11 +1358,31 @@ impl AdminHtmlClient {
         queue_rows_after: usize,
         stats_rows_before: usize,
         stats_rows_after: usize,
+        reconciliation: Option<SendReconciliationReport>,
         warnings: Vec<String>,
     ) -> SeedSendApplyReport {
         if sent {
             send_wizard.send_performed = true;
         }
+        let reconciliation = reconciliation.unwrap_or_else(|| {
+            if post_status_code.is_some() {
+                SendReconciliationReport::from_boundary_post(
+                    true,
+                    queue_rows_before,
+                    queue_rows_after,
+                    stats_rows_before,
+                    stats_rows_after,
+                )
+            } else {
+                SendReconciliationReport::refused(
+                    queue_rows_before,
+                    queue_rows_after,
+                    stats_rows_before,
+                    stats_rows_after,
+                    "no seed send request sent".to_string(),
+                )
+            }
+        });
         SeedSendApplyReport {
             ok: sent,
             configured: true,
@@ -1221,6 +1403,7 @@ impl AdminHtmlClient {
             campaign_body,
             post_status_code,
             post_redirected,
+            reconciliation,
             queue_rows_before,
             queue_rows_after,
             stats_rows_before,
@@ -1255,11 +1438,31 @@ impl AdminHtmlClient {
         queue_rows_after: usize,
         stats_rows_before: usize,
         stats_rows_after: usize,
+        reconciliation: Option<SendReconciliationReport>,
         warnings: Vec<String>,
     ) -> ProductionSendApplyReport {
         if sent {
             send_wizard.send_performed = true;
         }
+        let reconciliation = reconciliation.unwrap_or_else(|| {
+            if post_status_code.is_some() {
+                SendReconciliationReport::from_boundary_post(
+                    true,
+                    queue_rows_before,
+                    queue_rows_after,
+                    stats_rows_before,
+                    stats_rows_after,
+                )
+            } else {
+                SendReconciliationReport::refused(
+                    queue_rows_before,
+                    queue_rows_after,
+                    stats_rows_before,
+                    stats_rows_after,
+                    "no production send request sent".to_string(),
+                )
+            }
+        });
         ProductionSendApplyReport {
             ok: sent,
             configured: true,
@@ -1282,6 +1485,7 @@ impl AdminHtmlClient {
             campaign_body,
             post_status_code,
             post_redirected,
+            reconciliation,
             queue_rows_before,
             queue_rows_after,
             stats_rows_before,
@@ -1665,6 +1869,95 @@ fn guarded_send_final_form_post(
     Err(InterspireError::HtmlParse(
         "guarded final send form was not found".to_string(),
     ))
+}
+
+fn guarded_send_popup_url(base_url: &str, html: &str) -> Result<Option<Url>, InterspireError> {
+    for candidate in send_popup_path_candidates(html) {
+        if let Ok(url) = safety::ensure_allowed_guarded_send_popup(base_url, &candidate) {
+            return Ok(Some(url));
+        }
+    }
+    Ok(None)
+}
+
+fn send_popup_path_candidates(html: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let document = Html::parse_document(html);
+    if let Ok(link_selector) = Selector::parse("a") {
+        for link in document.select(&link_selector) {
+            if let Some(href) = link.value().attr("href") {
+                if href.to_ascii_lowercase().contains("page=send")
+                    && href.to_ascii_lowercase().contains("action=send")
+                {
+                    candidates.push(href.to_string());
+                }
+            }
+        }
+    }
+    if let Ok(form_selector) = Selector::parse("form") {
+        for form in document.select(&form_selector) {
+            if let Some(action) = form.value().attr("action") {
+                if action.to_ascii_lowercase().contains("page=send")
+                    && action.to_ascii_lowercase().contains("action=send")
+                {
+                    candidates.push(action.to_string());
+                }
+            }
+        }
+    }
+
+    let lower = html.to_ascii_lowercase();
+    let mut offset = 0usize;
+    while let Some(relative) = lower[offset..].find("index.php?page=send&action=send") {
+        let start = offset + relative;
+        let raw_tail = &html[start..];
+        let end = raw_tail
+            .find(|ch: char| matches!(ch, '"' | '\'' | '<' | '>' | ')' | ';') || ch.is_whitespace())
+            .unwrap_or(raw_tail.len());
+        candidates.push(raw_tail[..end].replace("&amp;", "&"));
+        offset = start + end.max(1);
+    }
+
+    candidates
+}
+
+fn send_popup_job_id(url: &Url) -> Option<u64> {
+    for key in ["job", "Job", "jobid", "JobID", "id", "sendid", "SendID"] {
+        if let Some(value) = url
+            .query_pairs()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+            .and_then(|(_, value)| value.as_ref().parse::<u64>().ok())
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn transport_failure_reason(html: &str) -> Option<String> {
+    let text = compact_text(
+        &Html::parse_document(html)
+            .root_element()
+            .text()
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    let lower = text.to_ascii_lowercase();
+    let markers = [
+        "smtp error",
+        "smtp failed",
+        "authentication failed",
+        "unable to send",
+        "could not send",
+        "send failed",
+        "failed to send",
+        "transport failed",
+        "error sending",
+    ];
+    if markers.iter().any(|marker| lower.contains(marker)) {
+        return Some(truncate(&redact::redact_sensitive_text(&text), 240));
+    }
+    None
 }
 
 fn controls_to_guarded_send_final_post_pairs(form: &ElementRef<'_>) -> Vec<(String, String)> {
@@ -2185,9 +2478,10 @@ fn sha256_hex(input: &str) -> String {
 mod tests {
     use super::{
         append_csrf_pair_if_missing, campaign_body_audit_from_html, campaign_body_step1_pairs,
-        campaign_body_step2_action_path, csrf_pair, guarded_send_final_form_post, list_ids_warning,
-        parse_send_wizard_final_page, recipient_count_marker, selected_or_hidden_list_ids,
-        send_step2_action_path,
+        campaign_body_step2_action_path, csrf_pair, guarded_send_final_form_post,
+        guarded_send_popup_url, list_ids_warning, parse_send_wizard_final_page,
+        recipient_count_marker, selected_or_hidden_list_ids, send_step2_action_path,
+        transport_failure_reason,
     };
 
     #[test]
@@ -2404,6 +2698,36 @@ mod tests {
         "#;
 
         assert!(guarded_send_final_form_post("https://example.test/admin/", html).is_err());
+    }
+
+    #[test]
+    fn guarded_send_popup_url_finds_started_continuation() {
+        let html = r#"
+            <html><body>
+              <script>
+                window.location = 'index.php?Page=Send&Action=Send&Job=2&Started=1&csrfToken=abc';
+              </script>
+            </body></html>
+        "#;
+
+        let url = guarded_send_popup_url("https://example.test/admin/", html)
+            .expect("popup parser")
+            .expect("popup continuation");
+
+        assert!(url.as_str().contains("Action=Send"));
+        assert!(url.as_str().contains("Started=1"));
+    }
+
+    #[test]
+    fn transport_failure_reason_is_redacted_and_bounded() {
+        let reason = transport_failure_reason(
+            "<html><body>SMTP error: authentication failed for recipient@example.invalid using fixture credential</body></html>",
+        )
+        .expect("failure marker");
+
+        assert!(reason.contains("SMTP error") || reason.contains("smtp error"));
+        assert!(!reason.contains("recipient@example.invalid"));
+        assert!(reason.len() <= 260);
     }
 
     #[test]

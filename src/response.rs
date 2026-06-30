@@ -12,6 +12,7 @@ mod production_send;
 mod queue;
 mod render;
 mod seed_send;
+mod send_outcome;
 mod send_wizard;
 mod template;
 
@@ -22,6 +23,7 @@ pub use production_send::*;
 pub use queue::*;
 pub use render::*;
 pub use seed_send::*;
+pub use send_outcome::*;
 pub use send_wizard::*;
 pub use template::*;
 

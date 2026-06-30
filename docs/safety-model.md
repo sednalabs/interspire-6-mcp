@@ -113,6 +113,11 @@ Apply:
 - re-reads the Schedule page before apply;
 - applies only the matching Schedule cancel route or one-job Schedule delete
   form post;
+- sends Schedule referer/origin context and accepted CSRF token headers for
+  guarded queue applies;
+- for delete candidates, may first follow a same-row, same-job Schedule
+  `Pause` route when Interspire exposes one, then applies the selected delete
+  plan;
 - re-reads the Schedule page after apply;
 - returns before/after counts and evidence.
 
@@ -157,8 +162,9 @@ phase.
 
 Form apply can change non-secret delivery and cron configuration inside
 Interspire, including SMTP host/username/port, bounce host/username/IMAP mode,
-hourly throttle, and cron toggles. It does not reach provider APIs, DNS,
-password fields, contact state, or suppression state.
+hourly throttle, cron toggles, and the Interspire test-mode send toggle. It
+does not reach provider APIs, DNS, password fields, contact state, or
+suppression state.
 
 Form apply does not authorize sending and does not mutate contacts,
 suppression state, import/export state, provider APIs, or DNS.
@@ -203,6 +209,15 @@ surface. They do not accept arbitrary admin URLs, do not schedule mail, and do
 not trigger cron. They post only the final Send-page form captured from the
 freshly proven wizard page, and only when the relevant runtime controls are
 enabled.
+
+Posting the final form is not considered proof of a send. Apply responses carry
+a post-send reconciliation object with the explicit status vocabulary
+`posted`, `queued`, `processed`, `transport_failed`, `delivered_unverified`,
+and `seed_proven`. After the final form post, the MCP follows only allowlisted
+Interspire popup send continuations of `Page=Send&Action=Send` with a numeric
+job identifier, including `Started=1` continuation routes, then rereads
+Schedule and Stats. `sent=true` is reserved for terminal reconciliation states,
+not for HTTP 200 or 302 alone.
 
 ## EDM Template Editing And Render Artifacts
 

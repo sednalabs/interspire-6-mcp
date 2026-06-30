@@ -1,4 +1,7 @@
-use super::{CampaignBodyAuditReport, Evidence, SeedReadinessGate, SendWizardReadbackReport};
+use super::{
+    CampaignBodyAuditReport, Evidence, SeedReadinessGate, SendReconciliationReport,
+    SendWizardReadbackReport,
+};
 use crate::redact;
 use serde::Serialize;
 
@@ -46,6 +49,7 @@ pub struct SeedSendApplyReport {
     pub campaign_body: CampaignBodyAuditReport,
     pub post_status_code: Option<u16>,
     pub post_redirected: bool,
+    pub reconciliation: SendReconciliationReport,
     pub queue_rows_before: usize,
     pub queue_rows_after: usize,
     pub stats_rows_before: usize,
@@ -91,6 +95,13 @@ impl SeedSendApplyReport {
             campaign_body: CampaignBodyAuditReport::fixture(),
             post_status_code: None,
             post_redirected: false,
+            reconciliation: SendReconciliationReport::refused(
+                0,
+                0,
+                0,
+                0,
+                "no send request sent".to_string(),
+            ),
             queue_rows_before: 0,
             queue_rows_after: 0,
             stats_rows_before: 0,
@@ -132,6 +143,7 @@ impl SeedSendApplyReport {
             campaign_body,
             post_status_code: Some(302),
             post_redirected: true,
+            reconciliation: SendReconciliationReport::fixture_seed(),
             queue_rows_before: 0,
             queue_rows_after: 0,
             stats_rows_before: 0,

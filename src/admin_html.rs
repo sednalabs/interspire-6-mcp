@@ -71,6 +71,7 @@ struct QueueControlLink {
     route: QueueControlRoute,
     url: Url,
     execution: QueueControlExecution,
+    pause_before_delete: Option<Url>,
 }
 
 #[derive(Debug, Clone)]
@@ -594,9 +595,40 @@ impl AdminHtmlClient {
                 )
             })?;
 
+        let mut notes = Vec::new();
+        if selected.candidate.action == QueueControlAction::Delete {
+            if let Some(pause_url) = selected.pause_before_delete.clone() {
+                let response =
+                    self.queue_control_get_request(pause_url)?
+                        .send()
+                        .map_err(|err| {
+                            InterspireError::Http(format!(
+                                "queue control pause preflight failed: {err}"
+                            ))
+                        })?;
+                let pause_status = response.status();
+                if !pause_status.is_success() && !pause_status.is_redirection() {
+                    return Err(InterspireError::Http(format!(
+                        "queue control pause preflight returned HTTP {}",
+                        pause_status.as_u16()
+                    )));
+                }
+                if pause_status.is_success() {
+                    let body = response
+                        .text()
+                        .map_err(|err| InterspireError::Http(err.to_string()))?;
+                    ensure_authenticated_html(&body)?;
+                }
+                notes.push(format!(
+                    "allowlisted Schedule pause preflight returned HTTP {} before delete",
+                    pause_status.as_u16()
+                ));
+            }
+        }
+
         let response = match &selected.execution {
             QueueControlExecution::Get => self
-                .with_access_headers(self.http.get(selected.url.clone()))
+                .queue_control_get_request(selected.url.clone())?
                 .send()
                 .map_err(|err| InterspireError::Http(err.to_string()))?,
             QueueControlExecution::DeletePost {
@@ -609,7 +641,7 @@ impl AdminHtmlClient {
                 let mut post_pairs = hidden_pairs.clone();
                 post_pairs.push((checkbox_name.clone(), identifier_value));
                 post_pairs.push((submit_name.clone(), submit_value.clone()));
-                self.with_access_headers(self.http.post(selected.url.clone()))
+                self.queue_control_post_request(selected.url.clone(), &post_pairs)?
                     .form(&post_pairs)
                     .send()
                     .map_err(|err| InterspireError::Http(err.to_string()))?
@@ -642,22 +674,66 @@ impl AdminHtmlClient {
             ));
         }
 
+        notes.extend([
+            format!(
+                "allowlisted Schedule queue {} route applied via guarded plan id",
+                action.as_str()
+            ),
+            format!(
+                "admin returned HTTP {}; Schedule page re-read after apply",
+                status.as_u16()
+            ),
+        ]);
+
         Ok(QueueControlApplyEvidence {
             before_candidate_count,
             before_row_summary,
             after_candidate_count: after.len(),
             after_row_still_present,
-            notes: vec![
-                format!(
-                    "allowlisted Schedule queue {} route applied via guarded plan id",
-                    action.as_str()
-                ),
-                format!(
-                    "admin returned HTTP {}; Schedule page re-read after apply",
-                    status.as_u16()
-                ),
-            ],
+            notes,
         })
+    }
+
+    fn queue_control_get_request(&self, url: Url) -> Result<RequestBuilder, InterspireError> {
+        Ok(self
+            .with_access_headers(self.http.get(url))
+            .header(
+                "referer",
+                safety::ensure_allowed_admin_get(
+                    self.config.base_url.as_deref().unwrap_or_default(),
+                    &AdminReadPage::Schedule.path(),
+                )?
+                .as_str(),
+            )
+            .header(
+                "origin",
+                admin_origin(self.config.base_url.as_deref().unwrap_or_default())?,
+            ))
+    }
+
+    fn queue_control_post_request(
+        &self,
+        url: Url,
+        post_pairs: &[(String, String)],
+    ) -> Result<RequestBuilder, InterspireError> {
+        let mut request = self
+            .with_access_headers(self.http.post(url))
+            .header(
+                "referer",
+                safety::ensure_allowed_admin_get(
+                    self.config.base_url.as_deref().unwrap_or_default(),
+                    &AdminReadPage::Schedule.path(),
+                )?
+                .as_str(),
+            )
+            .header(
+                "origin",
+                admin_origin(self.config.base_url.as_deref().unwrap_or_default())?,
+            );
+        if let Some((_, token)) = csrf_pair(post_pairs) {
+            request = request.header("x-csrf-token", token);
+        }
+        Ok(request)
     }
 
     pub fn campaign_readback(
@@ -1531,6 +1607,8 @@ fn parse_queue_control_links(
         }
         let row_summary = redact::redact_sensitive_text(&row_text);
         let row_checkbox = extract_row_checkbox(&row)?;
+        let pause_before_delete =
+            parse_row_pause_control(base_url, &row, &link_selector, row_checkbox.as_ref())?;
         for link in row.select(&link_selector) {
             let action_label = compact_text(&link.text().collect::<Vec<_>>().join(" "));
             if !looks_like_queue_control_label(&action_label) {
@@ -1555,10 +1633,11 @@ fn parse_queue_control_links(
                 &route_key,
                 &row_summary,
             ]);
+            let route_action = route.action;
             links.push(QueueControlLink {
                 candidate: QueueControlCandidate {
                     plan_id,
-                    action: route.action,
+                    action: route_action,
                     action_label: redact::redact_sensitive_text(&action_label),
                     row_summary: row_summary.clone(),
                     route_fingerprint: route_fingerprint(&route_key),
@@ -1567,11 +1646,44 @@ fn parse_queue_control_links(
                 route,
                 url,
                 execution,
+                pause_before_delete: if route_action == QueueControlAction::Delete {
+                    pause_before_delete.clone()
+                } else {
+                    None
+                },
             });
         }
     }
 
     Ok(links)
+}
+
+fn parse_row_pause_control(
+    base_url: &str,
+    row: &ElementRef<'_>,
+    link_selector: &Selector,
+    row_checkbox: Option<&(String, u64)>,
+) -> Result<Option<Url>, InterspireError> {
+    for link in row.select(link_selector) {
+        let action_label = compact_text(&link.text().collect::<Vec<_>>().join(" "));
+        if !action_label.to_ascii_lowercase().contains("pause") {
+            continue;
+        }
+        let Some(href) = link.value().attr("href") else {
+            continue;
+        };
+        let Ok((url, pause_job)) = safety::ensure_allowed_queue_control_pause(base_url, href)
+        else {
+            continue;
+        };
+        if let Some((_, row_job)) = row_checkbox {
+            if pause_job != *row_job {
+                continue;
+            }
+        }
+        return Ok(Some(url));
+    }
+    Ok(None)
 }
 
 fn row_contains_nested_rows(row: &ElementRef<'_>, row_selector: &Selector) -> bool {
@@ -1727,6 +1839,38 @@ fn route_key(url: &Url) -> String {
 fn route_fingerprint(route_key: &str) -> String {
     let digest = Sha256::digest(route_key.as_bytes());
     format!("route:{}", &hex::encode(digest)[..12])
+}
+
+fn csrf_pair(pairs: &[(String, String)]) -> Option<(&str, &str)> {
+    pairs.iter().find_map(|(name, value)| {
+        if is_csrf_field_name(name) {
+            Some((name.as_str(), value.as_str()))
+        } else {
+            None
+        }
+    })
+}
+
+fn is_csrf_field_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "csrf" | "csrftoken" | "csrf_token" | "token" | "_token" | "form_token" | "iem_csrf_token"
+    ) || lower.ends_with("token")
+}
+
+fn admin_origin(base_url: &str) -> Result<String, InterspireError> {
+    let url = Url::parse(base_url)
+        .map_err(|err| InterspireError::Safety(format!("invalid admin base url: {err}")))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| InterspireError::Safety("admin base url has no host".to_string()))?;
+    let mut origin = format!("{}://{}", url.scheme(), host);
+    if let Some(port) = url.port() {
+        origin.push(':');
+        origin.push_str(&port.to_string());
+    }
+    Ok(origin)
 }
 
 fn same_queue_control_target(left: &QueueControlRoute, right: &QueueControlRoute) -> bool {
@@ -3024,6 +3168,58 @@ mod tests {
         assert_eq!(delete.route.identifier_value, 182744);
         assert!(!delete.candidate.row_summary.contains("person@example.com"));
         assert_eq!(delete.candidate.route_fingerprint.len(), 18);
+    }
+
+    #[test]
+    fn queue_control_delete_candidates_capture_same_job_pause_preflight() {
+        let html = r#"
+            <table>
+              <tr>
+                <th>Campaign</th><th>Actions</th>
+              </tr>
+              <tr>
+                <td><input type="checkbox" name="jobs[]" value="2"></td>
+                <td>Launch seed send to recipient@example.invalid</td>
+                <td>
+                  <a href="index.php?Page=Schedule&Action=Pause&job=2&csrfToken=abc">Pause</a>
+                  <a href="index.php?Page=Schedule&Action=Delete&job=2&csrfToken=abc">Delete</a>
+                </td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" name="jobs[]" value="3"></td>
+                <td>Other job</td>
+                <td>
+                  <a href="index.php?Page=Schedule&Action=Pause&job=99&csrfToken=abc">Pause</a>
+                  <a href="index.php?Page=Schedule&Action=Delete&job=3&csrfToken=abc">Delete</a>
+                </td>
+              </tr>
+            </table>
+        "#;
+
+        let links = parse_queue_control_links("https://example.test/admin/", html, 25)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let delete = links
+            .iter()
+            .find(|link| {
+                link.candidate.action == QueueControlAction::Delete
+                    && link.route.identifier_value == 2
+            })
+            .unwrap_or_else(|| panic!("delete candidate should be present"));
+        assert!(delete.pause_before_delete.is_some());
+        let candidate_json =
+            serde_json::to_string(&delete.candidate).unwrap_or_else(|err| panic!("{err}"));
+        assert!(!candidate_json.contains("index.php"));
+        assert!(!candidate_json.contains("csrfToken"));
+
+        let mismatched = links
+            .iter()
+            .find(|link| {
+                link.candidate.action == QueueControlAction::Delete
+                    && link.route.identifier_value == 3
+            })
+            .unwrap_or_else(|| panic!("second delete candidate should be present"));
+        assert!(mismatched.pause_before_delete.is_none());
     }
 
     #[test]
