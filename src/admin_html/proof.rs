@@ -1956,7 +1956,7 @@ fn campaign_test_send_report(
         preheader_present,
         post_status_code,
         response_message: response_message.map(|message| redact::redact_sensitive_text(&message)),
-        campaign_body,
+        campaign_body: sent.then_some(campaign_body),
         queue_rows_before,
         queue_rows_after,
         stats_rows_before,
@@ -3130,6 +3130,7 @@ mod tests {
         assert!(!report.stats_unchanged);
         assert_eq!(report.queue_rows_before, report.queue_rows_after);
         assert_eq!(report.stats_rows_before, report.stats_rows_after);
+        assert!(report.campaign_body.is_none());
     }
 
     #[test]

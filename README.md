@@ -404,7 +404,9 @@ posting `Newsletters/SendPreview`. It does not create seed lists, import
 contacts, schedule mail, trigger cron, or authorize production mail. It also
 does not prove list-specific unsubscribe, custom fields, contact merge
 behavior, tracking behavior, or production audience metadata; use a seed-list
-send when those properties are the proof target.
+send when those properties are the proof target. A denied apply response omits
+campaign-body proof entirely; body audit data is returned only after the tool
+has re-read the target campaign as part of an accepted preview/send path.
 
 `interspire_campaign_template_artifact_update_preview` and
 `interspire_campaign_template_artifact_update_apply` transfer campaign HTML from
