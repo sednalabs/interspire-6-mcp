@@ -2108,24 +2108,11 @@ mod tests {
         let server = spawn_campaign_step2_fixture_server();
         let client = AdminHtmlClient::new(test_admin_config(&server.base_url))
             .unwrap_or_else(|err| panic!("{err}"));
-        let output_dir = std::env::temp_dir().join(format!(
-            "interspire-render-artifact-test-{}",
-            std::process::id()
-        ));
-        std::env::set_var(
-            "INTERSPIRE_RENDER_ARTIFACT_OUTPUT_DIR",
-            output_dir.display().to_string(),
-        );
-        std::env::set_var(
-            "INTERSPIRE_RENDER_ARTIFACT_ROOTS",
-            std::env::temp_dir().display().to_string(),
-        );
-
         let report = client
             .campaign_render_artifact(&crate::response::CampaignRenderArtifactRequest {
                 campaign_id: 7,
                 output_dir: None,
-                artifact_prefix: Some("fixture-step2".to_string()),
+                artifact_prefix: None,
                 include_image_blocked_variant: true,
             })
             .unwrap_or_else(|err| panic!("{err}"));

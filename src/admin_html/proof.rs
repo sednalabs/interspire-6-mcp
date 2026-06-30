@@ -142,13 +142,10 @@ impl AdminHtmlClient {
             ));
         }
 
-        let output_dir = private_artifacts::safe_render_output_dir(request.output_dir.as_deref())?;
-        private_artifacts::prepare_private_output_dir(&output_dir, "campaign render artifact")?;
+        let output_dir =
+            private_artifacts::prepare_private_render_output_dir(request.output_dir.as_deref())?;
         let stamp = private_artifacts::unix_timestamp_nanos()?;
-        let prefix = private_artifacts::safe_prefix(
-            request.artifact_prefix.as_deref(),
-            "interspire-campaign-render",
-        );
+        let prefix = private_artifacts::fixed_render_prefix(request.artifact_prefix.as_deref())?;
 
         let source_path = output_dir.join(format!("{prefix}-{stamp}-source.html"));
         let mut artifacts = vec![write_private_text_artifact(

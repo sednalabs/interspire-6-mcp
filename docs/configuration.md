@@ -116,19 +116,16 @@ plan. Preview remains available without them.
 ## Private Render Artifacts
 
 Render artifacts are private local files used for native-browser screenshot
-inspection. Configure at least one approved private root:
+inspection. The public build writes them under a fixed local directory:
 
 ```bash
-INTERSPIRE_RENDER_ARTIFACT_ROOTS=/secure/private
-INTERSPIRE_RENDER_ARTIFACT_OUTPUT_DIR=/secure/private/interspire-render
+/tmp/interspire-mcp-render-artifacts
 ```
 
-`INTERSPIRE_RENDER_ARTIFACT_OUTPUT_DIR` must be an absolute subdirectory under
-`INTERSPIRE_RENDER_ARTIFACT_ROOTS`, must not be inside the repository, and must
-not resolve through symlinks. Per-request `output_dir` values are rejected for
-render artifacts in the public build; configure the private output directory at
-process start instead. Responses return paths, hashes, and byte counts, not raw
-campaign HTML.
+Per-request `output_dir` and `artifact_prefix` values are rejected for render
+artifacts in the public build. Filenames are generated from a fixed prefix and
+timestamp, and the directory is checked for symlinks before permissions are
+applied. Responses return paths, hashes, and byte counts, not raw campaign HTML.
 
 ## Sensitive Reads
 
