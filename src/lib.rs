@@ -66,25 +66,29 @@ pub use response::{
     AudienceHygieneExportBeginRequest, AudienceHygieneExportReport, AudienceHygieneExportRequest,
     AudienceHygieneExportResumeRequest, AudienceHygieneExportStatusRequest,
     AudienceHygieneListSummary, CampaignBodyAuditReport, CampaignBodyAuditRequest,
-    CampaignReadbackReport, CampaignReadbackRequest, CampaignRenderArtifactReport,
-    CampaignRenderArtifactRequest, CampaignTemplateUpdateApplyRequest,
-    CampaignTemplateUpdatePreviewRequest, CampaignUpdateApplyRequest, CampaignUpdatePreviewRequest,
-    ContactStateReport, ContactStateRequest, Evidence, FormFieldChange, FormFieldDescriptor,
-    FormFieldUpdate, GuardedWriteApplyReport, GuardedWritePreviewReport, ListOwnerReadbackReport,
-    ListOwnerReadbackRequest, ListSummary, ListSummaryReport, ListSummaryRequest,
-    ListUpdateApplyRequest, ListUpdatePreviewRequest, ProductionSendApplyReport,
-    ProductionSendApplyRequest, QueueControlAction, QueueControlApplyReport,
-    QueueControlApplyRequest, QueueControlCandidate, QueueControlPreviewReport,
-    QueueControlPreviewRequest, QueueStatsReadbackReport, QueueStatsReadbackRequest,
-    RenderArtifact, SeedReadinessGate, SeedReadinessGateReport, SeedReadinessGateRequest,
-    SeedSendApplyReport, SeedSendApplyRequest, SendApplyStatus, SendReconciliationReport,
-    SendWizardReadbackReport, SendWizardReadbackRequest, SensitiveFieldDenial,
-    SensitiveFieldQueryReport, SensitiveFieldQueryRequest, SensitiveFieldTarget,
-    SensitiveFieldValue, SensitiveToolMetadata, SettingsAuditReport, SettingsAuditRequest,
-    SettingsSectionName, SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport,
-    StatusRequest, UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
-    UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
-    XmlAuthProbeReport, XmlAuthProbeRequest, DEFAULT_HYGIENE_QUERY_BUDGET, DEFAULT_LIST_READ_LIMIT,
+    CampaignCopyApplyReport, CampaignCopyApplyRequest, CampaignCopyPreviewReport,
+    CampaignCopyPreviewRequest, CampaignReadbackReport, CampaignReadbackRequest,
+    CampaignRenderArtifactReport, CampaignRenderArtifactRequest,
+    CampaignTemplateUpdateApplyRequest, CampaignTemplateUpdatePreviewRequest,
+    CampaignUpdateApplyRequest, CampaignUpdatePreviewRequest, ContactImportPreflightReport,
+    ContactImportPreflightRequest, ContactStateReport, ContactStateRequest, Evidence,
+    FormFieldChange, FormFieldDescriptor, FormFieldUpdate, GuardedWriteApplyReport,
+    GuardedWritePreviewReport, ListCreateApplyRequest, ListCreatePreviewRequest,
+    ListOwnerReadbackReport, ListOwnerReadbackRequest, ListSummary, ListSummaryReport,
+    ListSummaryRequest, ListUpdateApplyRequest, ListUpdatePreviewRequest,
+    ProductionSendApplyReport, ProductionSendApplyRequest, QueueControlAction,
+    QueueControlApplyReport, QueueControlApplyRequest, QueueControlCandidate,
+    QueueControlPreviewReport, QueueControlPreviewRequest, QueueStatsReadbackReport,
+    QueueStatsReadbackRequest, RenderArtifact, SeedReadinessGate, SeedReadinessGateReport,
+    SeedReadinessGateRequest, SeedSendApplyReport, SeedSendApplyRequest, SendApplyStatus,
+    SendReconciliationReport, SendWizardReadbackReport, SendWizardReadbackRequest,
+    SensitiveFieldDenial, SensitiveFieldQueryReport, SensitiveFieldQueryRequest,
+    SensitiveFieldTarget, SensitiveFieldValue, SensitiveToolMetadata, SettingsAuditReport,
+    SettingsAuditRequest, SettingsSectionName, SettingsUpdateApplyRequest,
+    SettingsUpdatePreviewRequest, StatusReport, StatusRequest, UserSmtpReadbackReport,
+    UserSmtpReadbackRequest, UserUpdateApplyRequest, UserUpdatePreviewRequest,
+    WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest, XmlAuthProbeReport,
+    XmlAuthProbeRequest, DEFAULT_HYGIENE_QUERY_BUDGET, DEFAULT_LIST_READ_LIMIT,
     HARD_HYGIENE_QUERY_BUDGET, HARD_LIST_READ_LIMIT,
 };
 use rmcp::{
@@ -215,6 +219,26 @@ pub trait InterspireReadBackend: Send + Sync {
         &self,
         request: &ListUpdateApplyRequest,
     ) -> Result<GuardedWriteApplyReport, InterspireError>;
+    fn list_create_preview(
+        &self,
+        request: &ListCreatePreviewRequest,
+    ) -> Result<GuardedWritePreviewReport, InterspireError>;
+    fn list_create_apply(
+        &self,
+        request: &ListCreateApplyRequest,
+    ) -> Result<GuardedWriteApplyReport, InterspireError>;
+    fn campaign_copy_preview(
+        &self,
+        request: &CampaignCopyPreviewRequest,
+    ) -> Result<CampaignCopyPreviewReport, InterspireError>;
+    fn campaign_copy_apply(
+        &self,
+        request: &CampaignCopyApplyRequest,
+    ) -> Result<CampaignCopyApplyReport, InterspireError>;
+    fn contact_import_preflight(
+        &self,
+        request: &ContactImportPreflightRequest,
+    ) -> Result<ContactImportPreflightReport, InterspireError>;
     fn user_update_preview(
         &self,
         request: &UserUpdatePreviewRequest,
@@ -455,6 +479,41 @@ impl InterspireMcpServer {
                     .with_discovery(ToolDiscoveryMetadata::new(
                         "Apply a guarded list metadata edit.",
                         ["interspire", "list", "apply", "guarded-write"],
+                    )),
+                ToolCapability::new("interspire_list_create_preview")
+                    .with_group("guarded-write")
+                    .with_read_only(true)
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Preview a guarded Interspire contact-list creation plan.",
+                        ["interspire", "list", "create", "preview", "guarded-write"],
+                    )),
+                ToolCapability::new("interspire_list_create_apply")
+                    .with_group("guarded-write")
+                    .with_read_only(false)
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Apply a previously previewed Interspire contact-list creation plan.",
+                        ["interspire", "list", "create", "apply", "guarded-write"],
+                    )),
+                ToolCapability::new("interspire_campaign_copy_preview")
+                    .with_group("guarded-write")
+                    .with_read_only(true)
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Preview a guarded campaign-copy plan for creating a draft from a known campaign.",
+                        ["interspire", "campaign", "copy", "preview", "guarded-write"],
+                    )),
+                ToolCapability::new("interspire_campaign_copy_apply")
+                    .with_group("guarded-write")
+                    .with_read_only(false)
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Apply a previously previewed campaign-copy plan and return the new draft id.",
+                        ["interspire", "campaign", "copy", "apply", "guarded-write"],
+                    )),
+                ToolCapability::new("interspire_contact_import_preflight")
+                    .with_group("read")
+                    .with_read_only(true)
+                    .with_discovery(ToolDiscoveryMetadata::new(
+                        "Preflight a local cleaned CSV import candidate with aggregate counts and hash only.",
+                        ["interspire", "contact", "import", "preflight", "csv"],
                     )),
                 ToolCapability::new("interspire_user_update_preview")
                     .with_group("guarded-write")
@@ -774,6 +833,52 @@ impl InterspireMcpServer {
         Parameters(request): Parameters<ListUpdateApplyRequest>,
     ) -> String {
         response::tool_json(self.backend.list_update_apply(&request))
+    }
+
+    #[tool(description = "Preview a guarded Interspire contact-list creation plan.")]
+    fn interspire_list_create_preview(
+        &self,
+        Parameters(request): Parameters<ListCreatePreviewRequest>,
+    ) -> String {
+        response::tool_json(self.backend.list_create_preview(&request))
+    }
+
+    #[tool(description = "Apply a previously previewed Interspire contact-list creation plan.")]
+    fn interspire_list_create_apply(
+        &self,
+        Parameters(request): Parameters<ListCreateApplyRequest>,
+    ) -> String {
+        response::tool_json(self.backend.list_create_apply(&request))
+    }
+
+    #[tool(
+        description = "Preview a guarded campaign-copy plan for creating a draft from a known campaign."
+    )]
+    fn interspire_campaign_copy_preview(
+        &self,
+        Parameters(request): Parameters<CampaignCopyPreviewRequest>,
+    ) -> String {
+        response::tool_json(self.backend.campaign_copy_preview(&request))
+    }
+
+    #[tool(
+        description = "Apply a previously previewed campaign-copy plan and return the new draft id."
+    )]
+    fn interspire_campaign_copy_apply(
+        &self,
+        Parameters(request): Parameters<CampaignCopyApplyRequest>,
+    ) -> String {
+        response::tool_json(self.backend.campaign_copy_apply(&request))
+    }
+
+    #[tool(
+        description = "Preflight a local cleaned CSV import candidate with aggregate counts and hash only."
+    )]
+    fn interspire_contact_import_preflight(
+        &self,
+        Parameters(request): Parameters<ContactImportPreflightRequest>,
+    ) -> String {
+        response::tool_json(self.backend.contact_import_preflight(&request))
     }
 
     #[tool(description = "Preview guarded user profile or footer edits.")]
@@ -1155,6 +1260,49 @@ mod tests {
             ))
         }
 
+        fn list_create_preview(
+            &self,
+            _request: &ListCreatePreviewRequest,
+        ) -> Result<GuardedWritePreviewReport, InterspireError> {
+            Ok(GuardedWritePreviewReport::fixture(
+                "list_create",
+                None,
+                None,
+            ))
+        }
+
+        fn list_create_apply(
+            &self,
+            _request: &ListCreateApplyRequest,
+        ) -> Result<GuardedWriteApplyReport, InterspireError> {
+            Ok(GuardedWriteApplyReport::fixture(
+                "list_create",
+                Some(8),
+                None,
+            ))
+        }
+
+        fn campaign_copy_preview(
+            &self,
+            _request: &CampaignCopyPreviewRequest,
+        ) -> Result<CampaignCopyPreviewReport, InterspireError> {
+            Ok(CampaignCopyPreviewReport::fixture())
+        }
+
+        fn campaign_copy_apply(
+            &self,
+            _request: &CampaignCopyApplyRequest,
+        ) -> Result<CampaignCopyApplyReport, InterspireError> {
+            Ok(CampaignCopyApplyReport::fixture())
+        }
+
+        fn contact_import_preflight(
+            &self,
+            _request: &ContactImportPreflightRequest,
+        ) -> Result<ContactImportPreflightReport, InterspireError> {
+            Ok(ContactImportPreflightReport::fixture())
+        }
+
         fn user_update_preview(
             &self,
             request: &UserUpdatePreviewRequest,
@@ -1260,13 +1408,18 @@ mod tests {
                 "interspire_audience_hygiene_export_resume",
                 "interspire_audience_hygiene_export_status",
                 "interspire_campaign_body_audit",
+                "interspire_campaign_copy_apply",
+                "interspire_campaign_copy_preview",
                 "interspire_campaign_readback",
                 "interspire_campaign_render_artifact",
                 "interspire_campaign_template_update_apply",
                 "interspire_campaign_template_update_preview",
                 "interspire_campaign_update_apply",
                 "interspire_campaign_update_preview",
+                "interspire_contact_import_preflight",
                 "interspire_contact_state",
+                "interspire_list_create_apply",
+                "interspire_list_create_preview",
                 "interspire_list_owner_readback",
                 "interspire_list_summary",
                 "interspire_list_update_apply",

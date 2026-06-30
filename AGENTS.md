@@ -16,18 +16,19 @@ This repository contains a public Rust MCP server for Interspire Email Marketer
   design, runtime enablement, preview/apply semantics, redacted output, and
   post-apply readback.
 - Current public write scope is intentionally narrow: guarded queue
-  cancel/delete, guarded campaign/list/user/settings edits, semantic EDM
-  template edits, private render-artifact generation, bounded seed sends, and
-  strictly gated production sends.
+  cancel/delete, guarded campaign/list/user/settings edits, guarded list
+  creation, guarded campaign copy, semantic EDM template edits, private
+  render-artifact generation, bounded seed sends, and strictly gated production
+  sends. CSV import preflight is read-only and aggregate-only.
 - Sensitive reads are exceptional read-only tools, not ordinary readback.
   Preserve the toolkit sensitive-read posture, runtime gate, per-call
   acknowledgement, exact field list, and Interspire-owned allowlists.
-- Do not add generic send, schedule, cron-trigger, import, raw contact export,
-  unsubscribe/resubscribe, suppression mutation, SMTP password, bounce
-  password, provider APIs, DNS, or generic admin URL tools. Any send tool must
-  remain an explicit guarded-send surface with runtime gates, fresh no-send
-  proof, exact expected recipient count, redacted output, and no arbitrary
-  admin URL input.
+- Do not add generic send, schedule, cron-trigger, contact-import apply, raw
+  contact export, unsubscribe/resubscribe, suppression mutation, SMTP password,
+  bounce password, provider APIs, DNS, or generic admin URL tools. Any send
+  tool must remain an explicit guarded-send surface with runtime gates, fresh
+  no-send proof, exact expected recipient count, redacted output, and no
+  arbitrary admin URL input.
 - Fixtures must be synthetic or redacted. Never commit credentials, cookies,
   raw recipient exports, saved admin HTML from a live system, provider payloads,
   private headers, or local operator files.
@@ -42,6 +43,10 @@ This repository contains a public Rust MCP server for Interspire Email Marketer
   and cache policy. Reuse compact artifacts such as metadata and coverage
   reports; do not pass large `target/` artifacts between jobs unless measured
   evidence proves it is faster than the shared Cargo cache.
+- Build installable binaries only on GitHub Actions. Do not compile or install
+  a local release binary from this workstation for handoff. Use the manual
+  `binary-build` workflow, download the artifact, verify the checksum, then
+  install that hosted artifact locally if needed.
 - Keep the manual `binary-build` workflow lean and predictable. It should
   produce a release binary artifact plus checksum for operator installation,
   use the shared Rust setup action, and avoid turning a one-off install lane

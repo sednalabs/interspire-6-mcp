@@ -7,6 +7,7 @@
 
 mod forms;
 mod proof;
+mod scaffold;
 
 use crate::{
     config::{AdminHtmlConfig, InterspireVersion, WriteExecutionMode},
@@ -827,6 +828,56 @@ impl AdminHtmlClient {
         )
     }
 
+    pub fn list_create_preview(
+        &self,
+        updates: &[FormFieldUpdate],
+    ) -> Result<GuardedWritePreviewReport, InterspireError> {
+        forms::guarded_write_preview(self, forms::GuardedFormTarget::ListCreate, updates)
+    }
+
+    pub fn list_create_apply(
+        &self,
+        plan_id: &str,
+        updates: &[FormFieldUpdate],
+        mode: WriteExecutionMode,
+    ) -> Result<GuardedWriteApplyReport, InterspireError> {
+        forms::guarded_list_create_apply(self, plan_id, updates, mode)
+    }
+
+    pub fn campaign_copy_preview(
+        &self,
+        source_campaign_id: u64,
+        guarded_writes_enabled: bool,
+        form_write_controls_enabled: bool,
+        mode: WriteExecutionMode,
+    ) -> Result<scaffold::CampaignCopyPreviewResult, InterspireError> {
+        scaffold::campaign_copy_preview(
+            self,
+            source_campaign_id,
+            guarded_writes_enabled,
+            form_write_controls_enabled,
+            mode,
+        )
+    }
+
+    pub fn campaign_copy_apply(
+        &self,
+        source_campaign_id: u64,
+        plan_id: &str,
+        guarded_writes_enabled: bool,
+        form_write_controls_enabled: bool,
+        mode: WriteExecutionMode,
+    ) -> Result<scaffold::CampaignCopyApplyResult, InterspireError> {
+        scaffold::campaign_copy_apply(
+            self,
+            source_campaign_id,
+            plan_id,
+            guarded_writes_enabled,
+            form_write_controls_enabled,
+            mode,
+        )
+    }
+
     pub fn user_update_preview(
         &self,
         user_id: u64,
@@ -951,7 +1002,7 @@ impl AdminHtmlClient {
         Ok(token)
     }
 
-    fn get_allowed(&self, path: &str) -> Result<String, InterspireError> {
+    pub(super) fn get_allowed(&self, path: &str) -> Result<String, InterspireError> {
         let base_url = self.config.base_url.as_deref().unwrap_or_default();
         let url = safety::ensure_allowed_admin_get(base_url, path)?;
         let response = self
@@ -983,7 +1034,7 @@ impl AdminHtmlClient {
         )
     }
 
-    fn with_access_headers(&self, request: RequestBuilder) -> RequestBuilder {
+    pub(super) fn with_access_headers(&self, request: RequestBuilder) -> RequestBuilder {
         let access = &self.config.cloudflare_access;
         let Some(client_id) = access.client_id() else {
             return request;
@@ -1028,7 +1079,7 @@ fn looks_like_save_submit(control: &forms::FormControl) -> bool {
             || control.value.to_ascii_lowercase().contains("save"))
 }
 
-fn ensure_authenticated_html(html: &str) -> Result<(), InterspireError> {
+pub(super) fn ensure_authenticated_html(html: &str) -> Result<(), InterspireError> {
     let document = Html::parse_document(html);
     let input_selector =
         Selector::parse("input").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
@@ -1154,7 +1205,7 @@ fn normalize_csrf_token(value: &str) -> Option<String> {
     Some(token.to_string())
 }
 
-fn admin_evidence(notes: Vec<String>) -> Evidence {
+pub(super) fn admin_evidence(notes: Vec<String>) -> Evidence {
     Evidence {
         source: "interspire_admin_html".to_string(),
         notes,
@@ -1965,7 +2016,7 @@ fn parse_form_values(html: &str) -> Result<HashMap<String, String>, InterspireEr
     Ok(values)
 }
 
-fn extract_ids_from_links(html: &str, page_marker: &str, id_key: &str) -> Vec<u64> {
+pub(super) fn extract_ids_from_links(html: &str, page_marker: &str, id_key: &str) -> Vec<u64> {
     let document = Html::parse_document(html);
     let selector =
         Selector::parse("a").unwrap_or_else(|err| panic!("selector parse failed: {err}"));
@@ -2060,7 +2111,7 @@ fn redact_email_like(value: &str) -> String {
     }
 }
 
-fn compact_text(value: &str) -> String {
+pub(super) fn compact_text(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

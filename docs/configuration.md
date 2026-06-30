@@ -110,8 +110,8 @@ INTERSPIRE_PRODUCTION_SEND_CONTROLS=0
 Current public behavior:
 
 - `INTERSPIRE_QUEUE_WRITE_CONTROLS=1` enables guarded queue cancel/delete apply.
-- `INTERSPIRE_FORM_WRITE_CONTROLS=1` enables guarded campaign, list, user, and
-  non-secret settings apply.
+- `INTERSPIRE_FORM_WRITE_CONTROLS=1` enables guarded campaign, list, user,
+  non-secret settings, list-create, and campaign-copy apply.
 - `INTERSPIRE_SEND_CONTROLS=1` enables explicitly acknowledged bounded seed
   sends through `interspire_seed_send_apply`.
 - `INTERSPIRE_PRODUCTION_SEND_CONTROLS=1` additionally enables
@@ -123,6 +123,31 @@ Current public behavior:
 
 Use write flags only for the process that should apply an already-reviewed
 plan. Preview remains available without them.
+
+## Import Preflight
+
+CSV import preflight is read-only and aggregate-only. It never imports contacts
+or mutates Interspire. Configure one or more private roots before using
+`interspire_contact_import_preflight`:
+
+```bash
+INTERSPIRE_IMPORT_PREFLIGHT_ALLOWED_ROOTS=/secure/private/imports
+```
+
+Multiple roots can be supplied with colon or comma separators:
+
+```bash
+INTERSPIRE_IMPORT_PREFLIGHT_ALLOWED_ROOTS=/secure/private/imports:/mnt/private-imports
+```
+
+The requested CSV path must already exist, must end in `.csv`, must not contain
+parent-directory components, and must canonicalize under one configured root.
+The tool returns only generic column labels, row counts, duplicate and
+invalid-looking counts, the selected email column position, and SHA-256. It
+does not return raw rows, raw headers, or email addresses. It blocks if an
+operator-supplied expected unique count does not match the file, or if the file
+exceeds the built-in byte, data-row, or unique-email safety caps. It has no
+apply companion in this public build.
 
 ## Private Render Artifacts
 
