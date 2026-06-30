@@ -10,8 +10,12 @@ pub(crate) const RENDER_OUTPUT_DIR_ENV: &str = "INTERSPIRE_RENDER_ARTIFACT_OUTPU
 pub(crate) const RENDER_OUTPUT_ROOTS_ENV: &str = "INTERSPIRE_RENDER_ARTIFACT_ROOTS";
 
 pub(crate) fn safe_render_output_dir(raw: Option<&str>) -> Result<PathBuf, InterspireError> {
-    safe_output_dir(
-        raw,
+    if raw.is_some_and(|value| !value.trim().is_empty()) {
+        return Err(InterspireError::Safety(format!(
+            "render artifact output_dir request values are disabled; configure {RENDER_OUTPUT_DIR_ENV} under {RENDER_OUTPUT_ROOTS_ENV}"
+        )));
+    }
+    safe_output_dir_from_env(
         RENDER_OUTPUT_DIR_ENV,
         RENDER_OUTPUT_ROOTS_ENV,
         "render artifact",
@@ -33,7 +37,10 @@ pub(crate) fn create_private_file(path: &Path, label: &str) -> Result<fs::File, 
         .mode(0o600)
         .open(path)
         .map_err(|err| {
-            InterspireError::Io(format!("failed to create private {label} artifact: {err}"))
+            InterspireError::Io(format!(
+                "failed to create private {} artifact: {err}",
+                label
+            ))
         })
 }
 
@@ -85,18 +92,17 @@ pub(crate) fn unix_timestamp_nanos() -> Result<u128, InterspireError> {
         .map_err(|err| InterspireError::Io(format!("system time before unix epoch: {err}")))
 }
 
-fn safe_output_dir(
-    raw: Option<&str>,
+fn safe_output_dir_from_env(
     output_dir_env: &str,
     output_roots_env: &str,
     label: &str,
 ) -> Result<PathBuf, InterspireError> {
-    let raw_path = raw
-        .map(ToString::to_string)
-        .or_else(|| env::var(output_dir_env).ok())
+    let raw_path = env::var(output_dir_env)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| {
             InterspireError::Safety(format!(
-                "{label} output_dir must be supplied or {output_dir_env} must be set"
+                "{output_dir_env} must be set to an approved private {label} output directory"
             ))
         })?;
     let path = PathBuf::from(&raw_path);
@@ -261,7 +267,8 @@ fn nearest_existing_ancestor(path: &Path, label: &str) -> Result<PathBuf, Inters
     while !current.exists() {
         current = current.parent().ok_or_else(|| {
             InterspireError::Safety(format!(
-                "{label} output_dir has no existing parent directory"
+                "{} output_dir has no existing parent directory",
+                label
             ))
         })?;
     }

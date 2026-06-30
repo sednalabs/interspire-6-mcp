@@ -17,7 +17,7 @@ use crate::{
 use reqwest::blocking::RequestBuilder;
 use scraper::{ElementRef, Html, Selector};
 use sha2::{Digest, Sha256};
-use std::{fs, io::Write, path::Path};
+use std::{io::Write, path::Path};
 use url::Url;
 
 impl AdminHtmlClient {
@@ -151,20 +151,24 @@ impl AdminHtmlClient {
         );
 
         let source_path = output_dir.join(format!("{prefix}-{stamp}-source.html"));
-        write_private_text_file(&source_path, &parts.html_body, "campaign source HTML")?;
-        let mut artifacts = vec![render_artifact("campaign_source_html", &source_path)?];
+        let mut artifacts = vec![write_private_text_artifact(
+            "campaign_source_html",
+            &source_path,
+            &parts.html_body,
+            "campaign source HTML",
+        )?];
 
         let image_blocked_path = if request.include_image_blocked_variant {
             let path = output_dir.join(format!("{prefix}-{stamp}-image-blocked.html"));
-            write_private_text_file(
+            artifacts.push(write_private_text_artifact(
+                "image_blocked_html",
                 &path,
                 &format!(
                     "<style>img{{visibility:hidden!important;outline:1px dashed #999!important;background:#f3f3f3!important;}}</style>\n{}",
                     parts.html_body
                 ),
                 "image-blocked campaign HTML",
-            )?;
-            artifacts.push(render_artifact("image_blocked_html", &path)?);
+            )?);
             Some(path)
         } else {
             None
@@ -173,8 +177,15 @@ impl AdminHtmlClient {
         let preview_path = output_dir.join(format!("{prefix}-{stamp}-preview.html"));
         let preview_html =
             render_preview_index(&parts, &source_path, image_blocked_path.as_deref())?;
-        write_private_text_file(&preview_path, &preview_html, "campaign render preview")?;
-        artifacts.insert(0, render_artifact("preview_index_html", &preview_path)?);
+        artifacts.insert(
+            0,
+            write_private_text_artifact(
+                "preview_index_html",
+                &preview_path,
+                &preview_html,
+                "campaign render preview",
+            )?,
+        );
 
         Ok(CampaignRenderArtifactReport {
             ok: true,
@@ -1434,28 +1445,25 @@ fn campaign_body_audit_from_parts(
     })
 }
 
-fn write_private_text_file(
+fn write_private_text_artifact(
+    kind: &str,
     path: &Path,
     contents: &str,
     label: &str,
-) -> Result<(), InterspireError> {
+) -> Result<RenderArtifact, InterspireError> {
     let mut file = private_artifacts::create_private_file(path, label)?;
     file.write_all(contents.as_bytes())
         .map_err(|err| InterspireError::Io(format!("failed to write private {label}: {err}")))?;
     file.flush()
         .map_err(|err| InterspireError::Io(format!("failed to flush private {label}: {err}")))?;
-    private_artifacts::set_private_file_permissions(path)
-}
-
-fn render_artifact(kind: &str, path: &Path) -> Result<RenderArtifact, InterspireError> {
-    let bytes = fs::read(path)
-        .map_err(|err| InterspireError::Io(format!("failed to read render artifact: {err}")))?;
+    private_artifacts::set_private_file_permissions(path)?;
+    let bytes = contents.as_bytes();
     Ok(RenderArtifact {
         kind: kind.to_string(),
         path: path.display().to_string(),
         private: true,
         bytes: bytes.len() as u64,
-        sha256: hex::encode(Sha256::digest(&bytes)),
+        sha256: hex::encode(Sha256::digest(bytes)),
     })
 }
 

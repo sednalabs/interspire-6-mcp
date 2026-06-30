@@ -123,10 +123,12 @@ INTERSPIRE_RENDER_ARTIFACT_ROOTS=/secure/private
 INTERSPIRE_RENDER_ARTIFACT_OUTPUT_DIR=/secure/private/interspire-render
 ```
 
-`output_dir` request values must be absolute subdirectories under
+`INTERSPIRE_RENDER_ARTIFACT_OUTPUT_DIR` must be an absolute subdirectory under
 `INTERSPIRE_RENDER_ARTIFACT_ROOTS`, must not be inside the repository, and must
-not resolve through symlinks. Responses return paths, hashes, and byte counts,
-not raw campaign HTML.
+not resolve through symlinks. Per-request `output_dir` values are rejected for
+render artifacts in the public build; configure the private output directory at
+process start instead. Responses return paths, hashes, and byte counts, not raw
+campaign HTML.
 
 ## Sensitive Reads
 
