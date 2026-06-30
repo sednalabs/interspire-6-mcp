@@ -361,9 +361,10 @@ mod tests {
 
     #[test]
     fn import_preflight_expected_unique_mismatch_is_blocking() {
-        let unique = std::process::id();
-        let dir = std::env::temp_dir().join(format!("interspire-import-preflight-{unique}"));
-        fs::create_dir_all(&dir).expect("create temp import dir");
+        let dir = Path::new("target/interspire-import-preflight-expected-unique-mismatch");
+        let _ = fs::remove_file(dir.join("candidate.csv"));
+        let _ = fs::remove_dir(dir);
+        fs::create_dir_all(dir).expect("create temp import dir");
         let csv_path = dir.join("candidate.csv");
         fs::write(&csv_path, "Email\nfirst@example.invalid\n").expect("write temp csv");
 
@@ -381,6 +382,6 @@ mod tests {
 
         assert!(err.contains("expected unique email count 2"));
         let _ = fs::remove_file(&csv_path);
-        let _ = fs::remove_dir(&dir);
+        let _ = fs::remove_dir(dir);
     }
 }
