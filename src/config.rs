@@ -15,6 +15,7 @@ pub struct InterspireServerConfig {
     pub guarded_writes: GuardedWriteConfig,
     pub sensitive_reads: SensitiveReadConfig,
     pub import_preflight: ImportPreflightConfig,
+    pub oci_send_ledger: OciSendLedgerConfig,
 }
 
 impl InterspireServerConfig {
@@ -58,6 +59,7 @@ impl InterspireServerConfig {
         let guarded_writes = GuardedWriteConfig::from_env();
         let sensitive_reads = SensitiveReadConfig::from_env();
         let import_preflight = ImportPreflightConfig::from_env();
+        let oci_send_ledger = OciSendLedgerConfig::from_env();
 
         Self {
             version,
@@ -67,6 +69,7 @@ impl InterspireServerConfig {
             guarded_writes,
             sensitive_reads,
             import_preflight,
+            oci_send_ledger,
         }
     }
 }
@@ -195,6 +198,12 @@ pub struct ImportPreflightConfig {
     pub allowed_roots: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct OciSendLedgerConfig {
+    pub path: Option<String>,
+    pub required_for_sends: bool,
+}
+
 impl SensitiveReadConfig {
     fn from_env() -> Self {
         Self {
@@ -217,6 +226,15 @@ impl ImportPreflightConfig {
             .map(ToString::to_string)
             .collect::<Vec<_>>();
         Self { allowed_roots }
+    }
+}
+
+impl OciSendLedgerConfig {
+    fn from_env() -> Self {
+        Self {
+            path: env_non_blank("INTERSPIRE_OCI_SEND_LEDGER_PATH"),
+            required_for_sends: env_truthy("INTERSPIRE_REQUIRE_OCI_SEND_LEDGER"),
+        }
     }
 }
 

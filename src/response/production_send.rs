@@ -1,6 +1,6 @@
 use super::{
-    CampaignBodyAuditReport, Evidence, SeedReadinessGate, SendReconciliationReport,
-    SendWizardReadbackReport,
+    CampaignBodyAuditReport, Evidence, OciLedgerPreflightReport, OciLedgerPreflightRequest,
+    SeedReadinessGate, SendReconciliationReport, SendWizardReadbackReport,
 };
 use crate::redact;
 use serde::Serialize;
@@ -23,6 +23,8 @@ pub struct ProductionSendApplyRequest {
     #[serde(default)]
     #[schemars(range(min = 1, max = 100))]
     pub max_queue_rows: Option<usize>,
+    #[serde(default)]
+    pub oci_ledger_preflight: Option<OciLedgerPreflightRequest>,
     pub acknowledge_production_send: bool,
     pub confirmation_phrase: String,
 }
@@ -50,6 +52,7 @@ pub struct ProductionSendApplyReport {
     pub campaign_body: CampaignBodyAuditReport,
     pub post_status_code: Option<u16>,
     pub post_redirected: bool,
+    pub oci_ledger_preflight: OciLedgerPreflightReport,
     pub reconciliation: SendReconciliationReport,
     pub queue_rows_before: usize,
     pub queue_rows_after: usize,
@@ -61,6 +64,11 @@ pub struct ProductionSendApplyReport {
 }
 
 impl ProductionSendApplyReport {
+    pub fn with_oci_ledger_preflight(mut self, report: OciLedgerPreflightReport) -> Self {
+        self.oci_ledger_preflight = report;
+        self
+    }
+
     pub fn denied(
         request: &ProductionSendApplyRequest,
         guarded_writes_enabled: bool,
@@ -90,6 +98,11 @@ impl ProductionSendApplyReport {
             campaign_body: CampaignBodyAuditReport::fixture(),
             post_status_code: None,
             post_redirected: false,
+            oci_ledger_preflight: OciLedgerPreflightReport::skipped(
+                false,
+                false,
+                "send was refused before OCI ledger preflight",
+            ),
             reconciliation: SendReconciliationReport::refused(
                 0,
                 0,
@@ -140,6 +153,7 @@ impl ProductionSendApplyReport {
             campaign_body,
             post_status_code: Some(302),
             post_redirected: true,
+            oci_ledger_preflight: OciLedgerPreflightReport::fixture_verified(),
             reconciliation: SendReconciliationReport::fixture_production(),
             queue_rows_before: 0,
             queue_rows_after: 0,

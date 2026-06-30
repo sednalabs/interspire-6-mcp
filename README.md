@@ -422,6 +422,10 @@ posting the final send form captured from the live Interspire page.
 - `INTERSPIRE_SEND_CONTROLS=1`
 - `acknowledge_seed_send=true`
 - an explicit list id set and `expected_recipient_count` from 1 to 20
+- when `INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1`, an `oci_ledger_preflight`
+  object whose `campaign_id` matches the Interspire campaign being sent and
+  whose batch id, sender domain, and expected row count match rows already
+  present in the configured private OCI send ledger.
 
 `interspire_production_send_apply` is the full-send boundary. It requires:
 
@@ -432,6 +436,9 @@ posting the final send form captured from the live Interspire page.
 - `confirmation_phrase="SEND_PRODUCTION_CAMPAIGN"`
 - exact expected recipient count, From email, Reply-To email, subject, and
   campaign HTML SHA-256
+- when `INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1`, a verified
+  `oci_ledger_preflight` object, with `campaign_id` equal to the Interspire
+  campaign id, before the final Interspire send form is posted.
 
 Both tools return redacted aggregate evidence plus a post-send reconciliation
 object. HTTP success from the final form post is reported only as `posted`.
@@ -441,6 +448,12 @@ Schedule and Stats, and classify the result as `posted`, `queued`, `processed`,
 `sent` boolean is true only when reconciliation reaches a terminal success
 state. Production sending should still be paired with provider-side monitoring
 and an Ops work item reference.
+
+The OCI ledger path is configured only by `INTERSPIRE_OCI_SEND_LEDGER_PATH`.
+Send requests cannot choose arbitrary ledger files, and the preflight campaign
+token must match the Interspire campaign id in the send request. Ledger
+preflight output returns hashes and counts only; it does not return raw
+recipients, raw campaign identifiers, private file paths, or provider payloads.
 
 ### No-Mutation Send Proof
 

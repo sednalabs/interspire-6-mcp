@@ -98,6 +98,8 @@ pub struct StatusReport {
     pub contact_write_controls_enabled: bool,
     pub send_controls_enabled: bool,
     pub production_send_controls_enabled: bool,
+    pub oci_send_ledger_configured: bool,
+    pub oci_send_ledger_required: bool,
     pub write_execution_mode: WriteExecutionMode,
     pub safe_mode: bool,
     pub capabilities: Vec<String>,
@@ -293,6 +295,8 @@ impl StatusReport {
             contact_write_controls_enabled: false,
             send_controls_enabled: false,
             production_send_controls_enabled: false,
+            oci_send_ledger_configured: false,
+            oci_send_ledger_required: false,
             write_execution_mode: WriteExecutionMode::PreviewApply,
             safe_mode: true,
             capabilities: vec![

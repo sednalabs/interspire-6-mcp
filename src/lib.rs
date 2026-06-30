@@ -46,6 +46,7 @@ mod config;
 mod error;
 mod guarded_write;
 mod live;
+mod oci_ledger;
 mod private_artifacts;
 mod redact;
 mod response;
@@ -77,9 +78,9 @@ pub use response::{
     FormFieldChange, FormFieldDescriptor, FormFieldUpdate, GuardedWriteApplyReport,
     GuardedWritePreviewReport, ListCreateApplyRequest, ListCreatePreviewRequest,
     ListOwnerReadbackReport, ListOwnerReadbackRequest, ListSummary, ListSummaryReport,
-    ListSummaryRequest, ListUpdateApplyRequest, ListUpdatePreviewRequest,
-    ProductionSendApplyReport, ProductionSendApplyRequest, QueueControlAction,
-    QueueControlApplyReport, QueueControlApplyRequest, QueueControlCandidate,
+    ListSummaryRequest, ListUpdateApplyRequest, ListUpdatePreviewRequest, OciLedgerPreflightReport,
+    OciLedgerPreflightRequest, ProductionSendApplyReport, ProductionSendApplyRequest,
+    QueueControlAction, QueueControlApplyReport, QueueControlApplyRequest, QueueControlCandidate,
     QueueControlPreviewReport, QueueControlPreviewRequest, QueueStatsReadbackReport,
     QueueStatsReadbackRequest, RenderArtifact, SeedReadinessGate, SeedReadinessGateReport,
     SeedReadinessGateRequest, SeedSendApplyReport, SeedSendApplyRequest, SendApplyStatus,
@@ -435,20 +436,28 @@ impl InterspireMcpServer {
                     .with_group("guarded-send")
                     .with_read_only(false)
                     .with_discovery(ToolDiscoveryMetadata::new(
-                        "Apply one explicitly acknowledged seed send after immediate readiness proof.",
-                        ["interspire", "seed", "send", "apply", "guarded-send"],
+                        "Apply one explicitly acknowledged seed send after immediate readiness proof and optional OCI ledger preflight.",
+                        [
+                            "interspire",
+                            "seed",
+                            "send",
+                            "apply",
+                            "guarded-send",
+                            "oci-ledger",
+                        ],
                     )),
                 ToolCapability::new("interspire_production_send_apply")
                     .with_group("guarded-send")
                     .with_read_only(false)
                     .with_discovery(ToolDiscoveryMetadata::new(
-                        "Apply an explicitly acknowledged production send after strict immediate readiness proof.",
+                        "Apply an explicitly acknowledged production send after strict immediate readiness proof and optional OCI ledger preflight.",
                         [
                             "interspire",
                             "production",
                             "send",
                             "apply",
                             "guarded-send",
+                            "oci-ledger",
                         ],
                     )),
                 ToolCapability::new("interspire_campaign_template_update_preview")
@@ -1017,7 +1026,7 @@ impl InterspireMcpServer {
     }
 
     #[tool(
-        description = "Apply one explicitly acknowledged seed send after immediate readiness proof. Requires INTERSPIRE_GUARDED_WRITES=1, INTERSPIRE_SEND_CONTROLS=1, acknowledge_seed_send=true, and a bounded expected recipient count."
+        description = "Apply one explicitly acknowledged seed send after immediate readiness proof. Requires INTERSPIRE_GUARDED_WRITES=1, INTERSPIRE_SEND_CONTROLS=1, acknowledge_seed_send=true, and a bounded expected recipient count; when INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1, also requires verified OCI ledger preflight."
     )]
     fn interspire_seed_send_apply(
         &self,
@@ -1027,7 +1036,7 @@ impl InterspireMcpServer {
     }
 
     #[tool(
-        description = "Apply an explicitly acknowledged production send after strict immediate readiness proof. Requires guarded writes, send controls, production send controls, exact expected count, From, Reply-To, subject, HTML SHA-256, and the required confirmation phrase."
+        description = "Apply an explicitly acknowledged production send after strict immediate readiness proof. Requires guarded writes, send controls, production send controls, exact expected count, From, Reply-To, subject, HTML SHA-256, and the required confirmation phrase; when INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1, also requires verified OCI ledger preflight."
     )]
     fn interspire_production_send_apply(
         &self,

@@ -8,6 +8,7 @@
 mod audience;
 mod common;
 mod forms;
+mod oci_ledger;
 mod production_send;
 mod queue;
 mod render;
@@ -20,6 +21,7 @@ mod template;
 pub use audience::*;
 pub use common::*;
 pub use forms::*;
+pub use oci_ledger::*;
 pub use production_send::*;
 pub use queue::*;
 pub use render::*;

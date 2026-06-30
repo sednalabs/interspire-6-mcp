@@ -73,6 +73,7 @@ request/response profile is maintained in
 | `response/queue.rs` | Queue preview/apply request and report contracts. |
 | `response/render.rs` | Private campaign render artifact request and report contracts. |
 | `response/template.rs` | Semantic EDM campaign template update request helpers. |
+| `response/oci_ledger.rs` | OCI send-ledger preflight request and redacted proof contracts. |
 | `response/seed_send.rs` | Guarded seed-send apply request and report contracts. |
 | `response/production_send.rs` | Guarded production-send apply request and report contracts. |
 | `response/send_outcome.rs` | Shared post-send reconciliation status and aggregate proof contracts. |
@@ -192,6 +193,10 @@ the live final send form, and post only through the guarded final-send route
 classifier. Seed sends require a bounded recipient count. Production sends also
 require the production runtime gate, exact expected count, From, Reply-To,
 subject, HTML SHA-256, and confirmation phrase.
+When OCI ledger enforcement is enabled, both send apply paths first verify the
+configured private ledger has the expected Interspire campaign/batch rows, then
+refuse before the final send form if that proof is missing, incomplete, or tied
+to a different campaign id than the one being sent.
 
 ## Contract Tests
 

@@ -394,6 +394,8 @@ fn status_contract_is_redacted_and_read_only() {
         .unwrap_or_else(|err| panic!("{err}"));
     assert!(report.ok);
     assert!(report.safe_mode);
+    assert!(!report.oci_send_ledger_configured);
+    assert!(!report.oci_send_ledger_required);
     assert!(report
         .blocked_operations
         .contains(&"generic_send_without_guarded_send_tool".to_string()));
@@ -853,6 +855,7 @@ fn seed_send_apply_contract_is_seed_only_and_redacted() {
             expected_subject: Some("Launch subject".to_string()),
             expected_html_sha256: None,
             max_queue_rows: Some(25),
+            oci_ledger_preflight: None,
             acknowledge_seed_send: true,
         })
         .unwrap_or_else(|err| panic!("{err}"));
@@ -886,6 +889,7 @@ fn production_send_apply_contract_requires_explicit_authorization_and_redacts() 
                 "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
             ops_work_item_ref: Some("w0000".to_string()),
             max_queue_rows: Some(25),
+            oci_ledger_preflight: None,
             acknowledge_production_send: true,
             confirmation_phrase: "SEND_PRODUCTION_CAMPAIGN".to_string(),
         })

@@ -94,6 +94,13 @@ impl LiveInterspireBackend {
                 .config
                 .guarded_writes
                 .production_send_controls_enabled,
+            oci_send_ledger_configured: self
+                .config
+                .oci_send_ledger
+                .path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty()),
+            oci_send_ledger_required: self.config.oci_send_ledger.required_for_sends,
             write_execution_mode: self.config.guarded_writes.execution_mode,
             safe_mode: true,
             capabilities: vec![
@@ -153,6 +160,7 @@ impl LiveInterspireBackend {
                     "campaign render artifacts write private local preview files for native-browser screenshots; they do not mutate Interspire".to_string(),
                     "seed send apply tools are disabled unless guarded write and send-control environment flags are explicitly enabled".to_string(),
                     "production send apply tools are disabled unless guarded write, send-control, and production-send-control environment flags are explicitly enabled".to_string(),
+                    "OCI send-ledger preflight is enforced before guarded send apply only when INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1".to_string(),
                     "audience hygiene export writes private local artifacts only and returns aggregate metadata".to_string(),
                     "queue control apply tools are disabled unless guarded write environment flags are explicitly enabled".to_string(),
                     "guarded form-write tools are disabled unless guarded write environment flags are explicitly enabled".to_string(),
