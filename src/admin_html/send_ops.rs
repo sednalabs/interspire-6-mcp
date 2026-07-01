@@ -2,7 +2,7 @@ use super::{admin_evidence, compact_text, parse_table_rows, AdminHtmlClient, Que
 use crate::{
     config::OciSendLedgerConfig,
     error::InterspireError,
-    oci_ledger, redact,
+    oci_ledger,
     response::{
         CronFieldSummary, CronReadinessReport, Evidence, OciLedgerPreflightReport, RedactedField,
         SendJobActionPlan, SendJobFollowUpContract, SendJobQueueCounters, SendJobScheduleState,
@@ -471,9 +471,9 @@ fn parse_named_count(row: &str, name: &str) -> Option<u64> {
 
 fn number_before(value: &str) -> Option<u64> {
     value
+        .trim_end()
         .chars()
         .rev()
-        .skip_while(|ch| !ch.is_ascii_digit())
         .take_while(|ch| ch.is_ascii_digit())
         .collect::<String>()
         .chars()
@@ -548,7 +548,7 @@ fn cron_fields_from_inventory_section(section: &SettingsInventorySection) -> Vec
 
 fn cron_field_summary(field: RedactedField) -> CronFieldSummary {
     CronFieldSummary {
-        name: redact::redact_sensitive_text(&field.name),
+        name: field.name,
         value_redacted: field.value,
     }
 }
@@ -569,7 +569,7 @@ fn looks_enabled_cron_value(value: &str) -> bool {
 fn cron_schedule_warnings(schedule_text: &str) -> Vec<String> {
     let lower = schedule_text.to_ascii_lowercase();
     let mut warnings = Vec::new();
-    if lower.contains("cron") && (lower.contains("not") || lower.contains("never")) {
+    if contains_cron_negative_phrase(&lower) {
         warnings.push("Interspire Schedule page indicates cron has not been detected".to_string());
     }
     if lower.contains("cron.php") && lower.contains("manual") {
@@ -582,8 +582,24 @@ fn contains_cron_detected_positive(schedule_text: &str) -> bool {
     let lower = schedule_text.to_ascii_lowercase();
     lower.contains("cron")
         && (lower.contains("last run") || lower.contains("detected"))
-        && !lower.contains("not detected")
-        && !lower.contains("never")
+        && !contains_cron_negative_phrase(&lower)
+}
+
+fn contains_cron_negative_phrase(lower_schedule_text: &str) -> bool {
+    [
+        "cron has not",
+        "cron has never",
+        "cron not detected",
+        "cron is not",
+        "cron was not",
+        "cron never run",
+        "cron has never run",
+        "cron has never been run",
+        "never run cron",
+        "not detected cron",
+    ]
+    .iter()
+    .any(|phrase| lower_schedule_text.contains(phrase))
 }
 
 #[cfg(test)]
@@ -596,6 +612,54 @@ mod tests {
             parse_sent_total("In Progress (Sent to 63 / 100)"),
             Some((Some(63), Some(100)))
         );
+    }
+
+    #[test]
+    fn missing_sent_count_does_not_parse_job_id_before_slash() {
+        assert_eq!(
+            parse_sent_total("Job 13 In Progress (Sent to / 100)"),
+            Some((None, Some(100)))
+        );
+    }
+
+    #[test]
+    fn cron_readiness_ignores_unrelated_not_and_never_text() {
+        let schedule_text =
+            "Cron status: Last Run 2026-07-01. Repeat: Never. Do not close this window.";
+
+        assert!(cron_schedule_warnings(schedule_text).is_empty());
+        assert!(contains_cron_detected_positive(schedule_text));
+    }
+
+    #[test]
+    fn cron_readiness_warns_on_specific_negative_status_text() {
+        let schedule_text = "Cron has not been detected by Interspire.";
+
+        assert_eq!(
+            cron_schedule_warnings(schedule_text),
+            vec!["Interspire Schedule page indicates cron has not been detected".to_string()]
+        );
+        assert!(!contains_cron_detected_positive(schedule_text));
+    }
+
+    #[test]
+    fn cron_field_names_remain_distinct_public_keys() {
+        let mut fields = vec![
+            cron_field_summary(RedactedField {
+                name: "cron_enabled".to_string(),
+                value: Some("1".to_string()),
+            }),
+            cron_field_summary(RedactedField {
+                name: "cron_send".to_string(),
+                value: Some("1".to_string()),
+            }),
+        ];
+
+        dedupe_cron_fields(&mut fields);
+
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, "cron_enabled");
+        assert_eq!(fields[1].name, "cron_send");
     }
 
     #[test]
