@@ -789,11 +789,13 @@ impl AdminHtmlClient {
         })?;
         let mut gates = Vec::new();
         gates.push(gate(
-            "campaign_has_single_unsubscribe",
-            campaign_body.unsubscribe_token_count == 1,
+            "campaign_has_expected_unsubscribe_tokens",
+            campaign_unsubscribe_token_shape_ok(&campaign_body),
             "blocker",
             format!(
-                "unsubscribe token count is {}",
+                "HTML unsubscribe token count is {}; text unsubscribe token count is {}; aggregate count is {}",
+                campaign_body.html_unsubscribe_token_count,
+                campaign_body.text_unsubscribe_token_count,
                 campaign_body.unsubscribe_token_count
             ),
         ));
@@ -2113,13 +2115,24 @@ fn campaign_body_audit_from_parts(
     let text_body = parts.text_body;
     let image_count = count_case_insensitive(&html_body, "<img");
     let missing_alt_image_count = count_missing_alt_images(&html_body)?;
-    let unsubscribe_token_count =
-        count_unsubscribe_tokens(&html_body) + count_unsubscribe_tokens(&text_body);
+    let html_unsubscribe_token_count = count_unsubscribe_tokens(&html_body);
+    let text_unsubscribe_token_count = count_unsubscribe_tokens(&text_body);
+    let unsubscribe_token_count = html_unsubscribe_token_count + text_unsubscribe_token_count;
     let mut warnings = Vec::new();
-    if unsubscribe_token_count != 1 {
-        warnings.push(format!(
-            "expected exactly one unsubscribe token, found {unsubscribe_token_count}"
-        ));
+    if !unsubscribe_token_shape_ok(
+        html_unsubscribe_token_count,
+        text_unsubscribe_token_count,
+        text_body.trim().is_empty(),
+    ) {
+        if text_body.trim().is_empty() {
+            warnings.push(format!(
+                "expected exactly one HTML unsubscribe token for HTML-only campaign, found {html_unsubscribe_token_count}"
+            ));
+        } else {
+            warnings.push(format!(
+                "expected exactly one unsubscribe token in each multipart alternative, found html={html_unsubscribe_token_count} text={text_unsubscribe_token_count}"
+            ));
+        }
     }
     let http_url_count = count_case_insensitive(&html_body, "http://");
     if http_url_count > 0 {
@@ -2147,6 +2160,8 @@ fn campaign_body_audit_from_parts(
         text_sha256: (!text_body.is_empty()).then(|| sha256_hex(&text_body)),
         text_bytes: text_body.len(),
         unsubscribe_token_count,
+        html_unsubscribe_token_count,
+        text_unsubscribe_token_count,
         http_url_count,
         https_url_count: count_case_insensitive(&html_body, "https://"),
         mailto_count: count_case_insensitive(&html_body, "mailto:"),
@@ -2160,6 +2175,22 @@ fn campaign_body_audit_from_parts(
             "allowlisted Newsletter edit GET body audit for campaign {campaign_id}"
         )]),
     })
+}
+
+fn campaign_unsubscribe_token_shape_ok(report: &CampaignBodyAuditReport) -> bool {
+    unsubscribe_token_shape_ok(
+        report.html_unsubscribe_token_count,
+        report.text_unsubscribe_token_count,
+        report.text_bytes == 0,
+    )
+}
+
+fn unsubscribe_token_shape_ok(html_count: usize, text_count: usize, text_is_empty: bool) -> bool {
+    if text_is_empty {
+        html_count == 1 && text_count == 0
+    } else {
+        html_count == 1 && text_count == 1
+    }
 }
 
 fn write_private_text_artifact(
@@ -3125,6 +3156,8 @@ mod tests {
         let serialized = serde_json::to_string(&report).expect("serialize report");
 
         assert_eq!(report.unsubscribe_token_count, 1);
+        assert_eq!(report.html_unsubscribe_token_count, 1);
+        assert_eq!(report.text_unsubscribe_token_count, 0);
         assert_eq!(report.http_url_count, 0);
         assert_eq!(report.https_url_count, 1);
         assert_eq!(report.image_count, 1);
@@ -3148,6 +3181,8 @@ mod tests {
         let serialized = serde_json::to_string(&report).expect("serialize report");
 
         assert_eq!(report.unsubscribe_token_count, 1);
+        assert_eq!(report.html_unsubscribe_token_count, 1);
+        assert_eq!(report.text_unsubscribe_token_count, 0);
         assert!(report.html_bytes > 0);
         assert_eq!(report.http_url_count, 0);
         assert_eq!(report.https_url_count, 1);
@@ -3155,6 +3190,24 @@ mod tests {
         assert_eq!(report.missing_alt_image_count, 0);
         assert!(!serialized.contains("myDevEditControl_html"));
         assert!(!serialized.contains("%%UNSUBSCRIBELINK%%"));
+    }
+
+    #[test]
+    fn campaign_body_audit_accepts_one_unsubscribe_per_multipart_alternative() {
+        let html = r#"
+            <form action="index.php?Page=Newsletters&Action=Edit&SubAction=Complete&id=7">
+              <input name="subject" value="Subject">
+              <textarea name="myDevEditControl_html"><div><a href="https://example.invalid">%%UNSUBSCRIBELINK%%</a></div></textarea>
+              <textarea name="myDevEditControl_text">Unsubscribe: %%UNSUBSCRIBELINK%%</textarea>
+            </form>
+        "#;
+
+        let report = campaign_body_audit_from_html(7, html).expect("campaign body audit");
+
+        assert_eq!(report.unsubscribe_token_count, 2);
+        assert_eq!(report.html_unsubscribe_token_count, 1);
+        assert_eq!(report.text_unsubscribe_token_count, 1);
+        assert!(report.warnings.is_empty());
     }
 
     #[test]
