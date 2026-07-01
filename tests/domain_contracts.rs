@@ -788,7 +788,9 @@ fn campaign_body_audit_contract_is_redacted_and_not_send_authorization() {
     let body = serde_json::to_string(&report).unwrap_or_else(|err| panic!("{err}"));
 
     assert!(report.ok);
-    assert_eq!(report.unsubscribe_token_count, 1);
+    assert_eq!(report.unsubscribe_token_count, 2);
+    assert_eq!(report.html_unsubscribe_token_count, 1);
+    assert_eq!(report.text_unsubscribe_token_count, 1);
     assert_eq!(report.http_url_count, 0);
     assert!(!report.visible_tracking_copy_detected);
     assert!(!report.production_send_authorized);
