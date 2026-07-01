@@ -257,7 +257,10 @@ guarded writes:
   also require `oci_ledger_preflight` to match the expected campaign/batch row
   count in the configured private OCI send ledger before the final send form is
   posted. Matched rows must include recipient keys, trace keys, and valid UTC
-  `submitted_at`/timestamp values. The preflight `campaign_id` must equal the
+  `submitted_at`/timestamp values that are fresh enough for the immediate send
+  boundary. Rows older than 15 minutes, missing timestamps, invalid timestamps,
+  or timestamps more than 5 minutes in the future are ignored and counted in
+  `stale_rows_ignored`. The preflight `campaign_id` must equal the
   Interspire campaign id in the send request. The ledger path is
   environment-configured only; tool callers cannot supply arbitrary file paths.
 - `interspire_oci_send_ledger_prepare_preview` and
@@ -286,8 +289,8 @@ enabled.
 
 OCI ledger preparation and preflight are not delivery proof. They prove only
 that a private local send ledger can contain, and does contain, the expected
-Interspire campaign/batch rows, timestamped when the ledger apply occurred,
-before the Interspire final send boundary.
+Interspire campaign/batch rows, timestamped when the ledger apply occurred and
+still fresh at the Interspire final send boundary.
 Provider acceptance, bounces, complaints, suppression reconciliation, and
 recipient rendering still require OCI and recipient-side readback after an
 explicitly approved send.

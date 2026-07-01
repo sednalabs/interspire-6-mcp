@@ -21,6 +21,8 @@ use std::{
 const LEDGER_PREPARE_VERSION: &str = "interspire-oci-send-ledger-prepare-v1";
 const MAX_LEDGER_MANIFEST_BYTES: u64 = 50_000_000;
 const MAX_LEDGER_MANIFEST_ROWS: u64 = 250_000;
+const LEDGER_PREPARE_MAX_AGE_SECONDS: u64 = 15 * 60;
+const LEDGER_PREPARE_CLOCK_SKEW_SECONDS: u64 = 5 * 60;
 
 pub fn verify_preflight(
     config: &OciSendLedgerConfig,
@@ -132,7 +134,9 @@ pub fn verify_preflight(
     let mut rows_with_recipient_key = 0u64;
     let mut rows_with_trace_key = 0u64;
     let mut rows_with_submitted_at = 0u64;
+    let mut stale_rows_ignored = 0u64;
     let mut invalid_rows = 0u64;
+    let now_unix = current_unix_seconds().unwrap_or(0);
     for line in BufReader::new(file).lines() {
         let Ok(line) = line else {
             invalid_rows += 1;
@@ -150,6 +154,10 @@ pub fn verify_preflight(
             continue;
         }
         if !row_matches(request, &value) {
+            continue;
+        }
+        if !has_fresh_submitted_at(&value, now_unix) {
+            stale_rows_ignored += 1;
             continue;
         }
         matched_rows += 1;
@@ -220,6 +228,11 @@ pub fn verify_preflight(
                 .to_string(),
         );
     }
+    if stale_rows_ignored > 0 && matched_rows != request.expected_rows {
+        warnings.push(format!(
+            "{stale_rows_ignored} otherwise matching OCI send ledger row(s) were ignored because submitted_at was missing, invalid, older than 15 minutes, or too far in the future"
+        ));
+    }
     if invalid_rows > 0 {
         warnings.push("one or more OCI send ledger rows were invalid JSON objects".to_string());
     }
@@ -240,6 +253,7 @@ pub fn verify_preflight(
         rows_with_recipient_key,
         rows_with_trace_key,
         rows_with_submitted_at,
+        stale_rows_ignored,
         invalid_rows,
         manifest_sha256: request
             .expected_manifest_sha256
@@ -738,6 +752,7 @@ fn prepared_rows_already_present(path: &Path, rows: &[String]) -> Result<bool, I
     if expected.is_empty() {
         return Ok(false);
     }
+    let now_unix = current_unix_seconds()?;
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
@@ -758,6 +773,9 @@ fn prepared_rows_already_present(path: &Path, rows: &[String]) -> Result<bool, I
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        if !has_fresh_submitted_at(&value, now_unix) {
+            continue;
+        }
         if let Some(fingerprint) = ledger_row_fingerprint(&value) {
             expected.remove(&fingerprint);
             if expected.is_empty() {
@@ -1254,6 +1272,19 @@ fn has_valid_submitted_at(value: &Value) -> bool {
         .is_some_and(valid_utc_timestamp)
 }
 
+fn has_fresh_submitted_at(value: &Value, now_unix: u64) -> bool {
+    let Some(submitted_at) =
+        string_any(value, &["submitted_at", "submittedAt", "time", "timestamp"])
+    else {
+        return false;
+    };
+    let Some(submitted_unix) = utc_timestamp_seconds(submitted_at) else {
+        return false;
+    };
+    submitted_unix <= now_unix.saturating_add(LEDGER_PREPARE_CLOCK_SKEW_SECONDS)
+        && submitted_unix.saturating_add(LEDGER_PREPARE_MAX_AGE_SECONDS) >= now_unix
+}
+
 fn valid_utc_timestamp(value: &str) -> bool {
     let trimmed = value.trim();
     let Some(core) = trimmed.strip_suffix('Z') else {
@@ -1302,6 +1333,25 @@ fn valid_utc_timestamp(value: &str) -> bool {
     }
 }
 
+fn utc_timestamp_seconds(value: &str) -> Option<u64> {
+    if !valid_utc_timestamp(value) {
+        return None;
+    }
+    let core = value.trim().strip_suffix('Z')?;
+    let bytes = core.as_bytes();
+    let year = parse_year(bytes);
+    let month = parse_two_digits(bytes, 5);
+    let day = parse_two_digits(bytes, 8);
+    let hour = parse_two_digits(bytes, 11) as u64;
+    let minute = parse_two_digits(bytes, 14) as u64;
+    let second = parse_two_digits(bytes, 17) as u64;
+    let days = unix_days_from_civil(year, month, day);
+    if days < 0 {
+        return None;
+    }
+    Some((days as u64 * 86_400) + (hour * 3_600) + (minute * 60) + second)
+}
+
 fn parse_two_digits(bytes: &[u8], start: usize) -> u32 {
     ((bytes[start] - b'0') as u32 * 10) + (bytes[start + 1] - b'0') as u32
 }
@@ -1324,6 +1374,21 @@ fn days_in_month(year: i64, month: u32) -> u32 {
 
 fn is_leap_year(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn unix_days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let adjusted_year = year - i64::from(month <= 2);
+    let era = if adjusted_year >= 0 {
+        adjusted_year
+    } else {
+        adjusted_year - 399
+    } / 400;
+    let year_of_era = adjusted_year - era * 400;
+    let month = month as i64;
+    let day = day as i64;
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }
 
 fn append_private_ledger_rows(
@@ -1393,11 +1458,15 @@ fn timestamped_private_ledger_row(
 }
 
 fn utc_now_rfc3339_seconds() -> Result<String, InterspireError> {
-    let seconds = SystemTime::now()
+    let seconds = current_unix_seconds()?;
+    Ok(format_unix_timestamp_utc(seconds))
+}
+
+fn current_unix_seconds() -> Result<u64, InterspireError> {
+    Ok(SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|err| InterspireError::Io(format!("system clock is before Unix epoch: {err}")))?
-        .as_secs();
-    Ok(format_unix_timestamp_utc(seconds))
+        .as_secs())
 }
 
 fn format_unix_timestamp_utc(seconds: u64) -> String {
@@ -1518,11 +1587,13 @@ mod tests {
     #[test]
     fn preflight_verifies_matching_private_ledger_rows_without_raw_output() {
         let path = fixture_path("valid");
+        let submitted_at = fresh_submitted_at();
         write_private_fixture(
             &path,
             format!(
-                "{{\"submitted_at\":\"2026-07-01T03:45:00Z\",\"campaign_hash\":\"{}\",\"batch_hash\":\"{}\",\"sender\":\"news@example.invalid\",\"recipient_hash\":\"{}\",\"message_id_hash\":\"{}\"}}\n\
+                "{{\"submitted_at\":\"{}\",\"campaign_hash\":\"{}\",\"batch_hash\":\"{}\",\"sender\":\"news@example.invalid\",\"recipient_hash\":\"{}\",\"message_id_hash\":\"{}\"}}\n\
                  {{\"campaign_id\":\"other\",\"batch_id\":\"batch-private\",\"sender\":\"news@example.invalid\",\"recipient\":\"person@example.invalid\",\"message_id\":\"msg-2\"}}\n",
+                submitted_at,
                 ledger_hash("campaign-private"),
                 ledger_hash("batch-private"),
                 ledger_hash("person@example.invalid"),
@@ -1551,6 +1622,7 @@ mod tests {
         assert_eq!(report.rows_with_recipient_key, 1);
         assert_eq!(report.rows_with_trace_key, 1);
         assert_eq!(report.rows_with_submitted_at, 1);
+        assert_eq!(report.stale_rows_ignored, 0);
         assert!(!report.raw_payload_returned);
         assert!(!body.contains("person@example.invalid"));
         assert!(!body.contains("campaign-private"));
@@ -1869,10 +1941,12 @@ mod tests {
         let preview =
             prepare_preview(&ledger_config, &preview_request).unwrap_or_else(|err| panic!("{err}"));
         let manifest_sha256 = preview.manifest_sha256.clone().expect("manifest sha");
+        let submitted_at = fresh_submitted_at();
         write_private_fixture(
             LEDGER,
             format!(
-                "{{\"submitted_at\":\"2026-07-01T03:45:00Z\",\"campaign_id\":\"7\",\"batch_hash\":\"{}\",\"sender_domain\":\"example.invalid\",\"manifest_sha256\":\"{}\",\"recipient_hash\":\"{}\",\"message_id_hash\":\"{}\"}}\n",
+                "{{\"submitted_at\":\"{}\",\"campaign_id\":\"7\",\"batch_hash\":\"{}\",\"sender_domain\":\"example.invalid\",\"manifest_sha256\":\"{}\",\"recipient_hash\":\"{}\",\"message_id_hash\":\"{}\"}}\n",
+                submitted_at,
                 ledger_hash("batch-private"),
                 manifest_sha256,
                 ledger_hash("different-recipient"),
@@ -1918,7 +1992,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_apply_refuses_idempotence_for_timestampless_existing_rows() {
+    fn prepare_apply_appends_fresh_rows_for_timestampless_existing_rows() {
         const LEDGER: &str =
             "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-timestampless-ledger.jsonl";
         const MANIFEST: &str =
@@ -1983,18 +2057,91 @@ mod tests {
         .unwrap_or_else(|err| panic!("{err}"));
         let ledger_body = fs::read_to_string(LEDGER).expect("read ledger");
 
-        assert!(!report.ok);
-        assert!(!report.oci_ledger_preflight.verified);
+        assert!(report.ok);
+        assert!(report.oci_ledger_preflight.verified);
         assert_eq!(report.oci_ledger_preflight.matched_rows, 1);
-        assert_eq!(report.oci_ledger_preflight.rows_with_submitted_at, 0);
+        assert_eq!(report.oci_ledger_preflight.rows_with_submitted_at, 1);
+        assert_eq!(report.oci_ledger_preflight.stale_rows_ignored, 1);
         assert!(!report.already_present);
-        assert!(!report.ledger_written);
-        assert_eq!(ledger_body.lines().count(), 1);
-        assert!(report
-            .oci_ledger_preflight
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("submitted_at")));
+        assert!(report.ledger_written);
+        assert_eq!(ledger_body.lines().count(), 2);
+        let _ = fs::remove_file(LEDGER);
+        let _ = fs::remove_file(MANIFEST);
+    }
+
+    #[test]
+    fn prepare_apply_appends_fresh_rows_when_exact_existing_rows_are_stale() {
+        const LEDGER: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-stale-existing-ledger.jsonl";
+        const MANIFEST: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-stale-existing-manifest.jsonl";
+        prepare_private_fixture_parent(LEDGER);
+        let _ = fs::remove_file(LEDGER);
+        let _ = fs::remove_file(MANIFEST);
+        write_private_fixture(
+            MANIFEST,
+            "{\"recipient_email\":\"person-one@example.invalid\",\"correlation_id\":\"trace-one\"}\n",
+        );
+        let ledger_config = OciSendLedgerConfig {
+            path: Some(LEDGER.to_string()),
+            required_for_sends: true,
+        };
+        let preview_request = OciSendLedgerPreparePreviewRequest {
+            campaign_id: "7".to_string(),
+            batch_id: "batch-private".to_string(),
+            expected_rows: 1,
+            sender_domain: "example.invalid".to_string(),
+            manifest_path: MANIFEST.to_string(),
+            expected_manifest_sha256: None,
+            approved_sender: None,
+            template_sha256: None,
+            subject_sha256: None,
+        };
+        let preview =
+            prepare_preview(&ledger_config, &preview_request).unwrap_or_else(|err| panic!("{err}"));
+        let manifest_sha256 = preview.manifest_sha256.clone().expect("manifest sha");
+        write_private_fixture(
+            LEDGER,
+            format!(
+                "{{\"submitted_at\":\"2000-01-01T00:00:00Z\",\"campaign_id\":\"7\",\"batch_hash\":\"{}\",\"sender_domain\":\"example.invalid\",\"manifest_sha256\":\"{}\",\"recipient_hash\":\"{}\",\"correlation_id_hash\":\"{}\"}}\n",
+                ledger_hash("batch-private"),
+                manifest_sha256,
+                ledger_hash("person-one@example.invalid"),
+                ledger_hash("trace-one")
+            ),
+        );
+
+        let report = prepare_apply(
+            &GuardedWriteConfig {
+                enabled: true,
+                send_controls_enabled: true,
+                ..GuardedWriteConfig::default()
+            },
+            &ledger_config,
+            &OciSendLedgerPrepareApplyRequest {
+                campaign_id: preview_request.campaign_id,
+                batch_id: preview_request.batch_id,
+                expected_rows: preview_request.expected_rows,
+                sender_domain: preview_request.sender_domain,
+                manifest_path: preview_request.manifest_path,
+                expected_manifest_sha256: preview_request.expected_manifest_sha256,
+                approved_sender: preview_request.approved_sender,
+                template_sha256: preview_request.template_sha256,
+                subject_sha256: preview_request.subject_sha256,
+                expected_plan_id: preview.plan_id.expect("plan id"),
+                acknowledge_ledger_write: true,
+            },
+        )
+        .unwrap_or_else(|err| panic!("{err}"));
+        let ledger_body = fs::read_to_string(LEDGER).expect("read ledger");
+
+        assert!(report.ok);
+        assert!(report.ledger_written);
+        assert!(!report.already_present);
+        assert_eq!(report.appended_rows, 1);
+        assert_eq!(report.oci_ledger_preflight.matched_rows, 1);
+        assert_eq!(report.oci_ledger_preflight.stale_rows_ignored, 1);
+        assert_eq!(ledger_body.lines().count(), 2);
         let _ = fs::remove_file(LEDGER);
         let _ = fs::remove_file(MANIFEST);
     }
@@ -2348,6 +2495,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn utc_timestamp_parser_round_trips_formatter() {
+        let seconds = 1_782_877_500;
+        let formatted = format_unix_timestamp_utc(seconds);
+        assert_eq!(utc_timestamp_seconds(&formatted), Some(seconds));
+        assert!(has_fresh_submitted_at(
+            &serde_json::json!({ "submitted_at": formatted }),
+            seconds + 60
+        ));
+        assert!(!has_fresh_submitted_at(
+            &serde_json::json!({ "submitted_at": "2000-01-01T00:00:00Z" }),
+            seconds
+        ));
+    }
+
     fn fixture_path(label: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2379,5 +2541,9 @@ mod tests {
             .expect("open private fixture");
         file.write_all(contents.as_ref())
             .expect("write private fixture");
+    }
+
+    fn fresh_submitted_at() -> String {
+        utc_now_rfc3339_seconds().expect("fresh timestamp")
     }
 }

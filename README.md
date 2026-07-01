@@ -448,7 +448,10 @@ posting the final send form captured from the live Interspire page.
   object whose `campaign_id` matches the Interspire campaign being sent and
   whose batch id, sender domain, and expected row count match rows already
   present in the configured private OCI send ledger, including valid UTC
-  `submitted_at`/timestamp values on matched rows.
+  `submitted_at`/timestamp values on matched rows. Otherwise matching rows
+  older than 15 minutes, missing timestamps, invalid timestamps, or timestamps
+  more than 5 minutes in the future are ignored and reported through
+  `stale_rows_ignored`.
 
 `interspire_oci_send_ledger_prepare_preview` and
 `interspire_oci_send_ledger_prepare_apply` can prepare those private ledger
@@ -457,7 +460,9 @@ the configured ledger directory and returns a plan id without writing. Apply
 requires `INTERSPIRE_GUARDED_WRITES=1`, `INTERSPIRE_SEND_CONTROLS=1`, the exact
 plan id, and `acknowledge_ledger_write=true`, then writes only sanitized ledger
 rows with an apply-time UTC `submitted_at` and reruns the same preflight gate.
-The prepare tools do not contact OCI and do not perform an Interspire send.
+If exact matching rows already exist but are stale or lack a valid timestamp,
+apply appends fresh timestamped rows instead of claiming idempotence. The
+prepare tools do not contact OCI and do not perform an Interspire send.
 
 `interspire_production_send_apply` is the full-send boundary. It requires:
 
