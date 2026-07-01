@@ -230,6 +230,23 @@ pub fn ensure_allowed_guarded_send_popup(
     Ok(url)
 }
 
+pub fn ensure_allowed_guarded_schedule_approval(
+    base_url: &str,
+    relative_path: &str,
+) -> Result<Url, InterspireError> {
+    let base = Url::parse(base_url)
+        .map_err(|err| InterspireError::Safety(format!("invalid admin base url: {err}")))?;
+    let base = normalize_admin_base(base);
+    let url = base.join(relative_path).map_err(|err| {
+        InterspireError::Safety(format!("invalid guarded schedule approval path: {err}"))
+    })?;
+
+    ensure_admin_base_scope(&base, &url)?;
+    ensure_admin_front_controller_path(&base, &url)?;
+    classify_allowed_guarded_schedule_approval(&url)?;
+    Ok(url)
+}
+
 pub fn ensure_allowed_campaign_copy_get(
     base_url: &str,
     relative_path: &str,
@@ -735,6 +752,37 @@ pub fn classify_allowed_guarded_send_popup(url: &Url) -> Result<(), InterspireEr
                 "guarded send popup Started value is not 0 or 1".to_string(),
             ));
         }
+    }
+
+    Ok(())
+}
+
+pub fn classify_allowed_guarded_schedule_approval(url: &Url) -> Result<(), InterspireError> {
+    if url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .is_none_or(|segment| segment != "index.php")
+    {
+        return Err(InterspireError::Safety(
+            "guarded schedule approval path is not index.php".to_string(),
+        ));
+    }
+
+    let pairs = url.query_pairs().collect::<Vec<_>>();
+    ensure_no_duplicate_query_keys(&pairs)?;
+    ensure_only_query_keys(&pairs, &["Page", "A"])?;
+
+    let page = query_value(&pairs, "Page");
+    let approve = query_value(&pairs, "A");
+    if !matches!(page.as_deref(), Some("Schedule")) {
+        return Err(InterspireError::Safety(
+            "guarded schedule approval must target the Schedule page".to_string(),
+        ));
+    }
+    if !matches!(approve.as_deref(), Some("1")) {
+        return Err(InterspireError::Safety(
+            "guarded schedule approval requires A=1".to_string(),
+        ));
     }
 
     Ok(())
@@ -1702,6 +1750,32 @@ mod tests {
         ] {
             assert!(
                 ensure_allowed_guarded_send_popup(base_url, path).is_err(),
+                "{path} should be blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_only_guarded_schedule_approval_route() {
+        let base_url = "https://example.test/admin/";
+        let approval =
+            ensure_allowed_guarded_schedule_approval(base_url, "index.php?Page=Schedule&A=1")
+                .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(
+            approval.as_str(),
+            "https://example.test/admin/index.php?Page=Schedule&A=1"
+        );
+
+        for path in [
+            "index.php?Page=Schedule",
+            "index.php?Page=Schedule&A=0",
+            "index.php?Page=Schedule&A=1&Action=Approve",
+            "index.php?Page=Schedule&Action=Approve&job=42",
+            "index.php?Page=Send&A=1",
+            "cron/index.php?Page=Schedule&A=1",
+        ] {
+            assert!(
+                ensure_allowed_guarded_schedule_approval(base_url, path).is_err(),
                 "{path} should be blocked"
             );
         }
