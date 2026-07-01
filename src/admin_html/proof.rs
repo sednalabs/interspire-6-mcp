@@ -1344,6 +1344,7 @@ impl AdminHtmlClient {
         let mut popup_steps = 0usize;
         let mut job_id = None;
         let mut smtp_reason = None;
+        let mut final_response_summary = None;
         let mut popup_notes = Vec::new();
         let mut seen_popup_urls = HashSet::new();
         let mut next_popup_url = response
@@ -1365,6 +1366,7 @@ impl AdminHtmlClient {
             if !html.trim().is_empty() {
                 ensure_authenticated_html(&html)?;
                 smtp_reason = transport_failure_reason(&html);
+                final_response_summary = step4_response_summary(&html);
                 next_popup_url = next_popup_url.or(guarded_send_popup_url(
                     self.config.base_url.as_deref().unwrap_or_default(),
                     &html,
@@ -1480,6 +1482,11 @@ impl AdminHtmlClient {
         }
         if queued {
             popup_notes.push("Schedule rows changed after guarded send loop".to_string());
+        }
+        if job_id.is_none() && !stats_changed {
+            if let Some(summary) = final_response_summary {
+                popup_notes.push(format!("Final Step4 response summary: {summary}"));
+            }
         }
         let follow_up_contract = if matches!(status, SendApplyStatus::Queued) {
             job_id.map(|job_id| {
@@ -2681,6 +2688,39 @@ fn transport_failure_reason(html: &str) -> Option<String> {
     None
 }
 
+fn step4_response_summary(html: &str) -> Option<String> {
+    let text = compact_text(
+        &Html::parse_document(html)
+            .root_element()
+            .text()
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    if text.is_empty() {
+        return None;
+    }
+    let lower = text.to_ascii_lowercase();
+    let branch = if lower.contains("access denied") || lower.contains("permission denied") {
+        "access_denied"
+    } else if lower.contains("choose") && lower.contains("campaign") {
+        "choose_campaign"
+    } else if lower.contains("cannot send") && lower.contains("past") {
+        "cannot_send_in_past"
+    } else if lower.contains("not allowed to send")
+        || lower.contains("send limit")
+        || lower.contains("sending limit")
+        || lower.contains("maximum")
+    {
+        "send_limit_or_validation"
+    } else if lower.contains("scheduled") || lower.contains("total recipients") {
+        "cron_confirmation_or_send_summary"
+    } else {
+        "unclassified"
+    };
+    let excerpt = truncate(&redact::redact_sensitive_text(&text), 240);
+    Some(format!("{branch}; excerpt={excerpt}"))
+}
+
 fn controls_to_guarded_send_final_post_pairs(form: &ElementRef<'_>) -> Vec<(String, String)> {
     let mut submit_pair = None;
     let mut pairs = Vec::new();
@@ -3206,8 +3246,8 @@ mod tests {
         is_guarded_send_campaign_selection_name, list_ids_warning, optional_nonempty_sha256,
         parse_send_wizard_final_page, preview_send_response_success, recipient_count_marker,
         rows_changed_for_send_proof, rows_unchanged_for_send_proof, seed_send_apply_warnings,
-        selected_or_hidden_list_ids, send_step2_action_path, sha256_hex, transport_failure_reason,
-        validate_single_preview_email,
+        selected_or_hidden_list_ids, send_step2_action_path, sha256_hex, step4_response_summary,
+        transport_failure_reason, validate_single_preview_email,
     };
     use crate::{
         redact,
@@ -3790,6 +3830,18 @@ mod tests {
         assert!(reason.contains("SMTP error") || reason.contains("smtp error"));
         assert!(!reason.contains("recipient@example.invalid"));
         assert!(reason.len() <= 260);
+    }
+
+    #[test]
+    fn step4_response_summary_classifies_and_redacts_refusal_text() {
+        let summary = step4_response_summary(
+            "<html><body>Access denied for recipient@example.invalid while sending campaign</body></html>",
+        )
+        .expect("summary");
+
+        assert!(summary.starts_with("access_denied;"));
+        assert!(!summary.contains("recipient@example.invalid"));
+        assert!(summary.len() <= 280);
     }
 
     #[test]
