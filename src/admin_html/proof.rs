@@ -1049,9 +1049,11 @@ impl AdminHtmlClient {
         }
 
         let send_evidence = self.post_guarded_send_and_reconcile(
-            guarded_send_final_form_post(
+            guarded_send_final_form_post_for_request(
                 self.config.base_url.as_deref().unwrap_or_default(),
                 &final_html,
+                request.campaign_id,
+                &request.list_ids,
             )?,
             &queue_before,
             &stats_before,
@@ -1062,7 +1064,8 @@ impl AdminHtmlClient {
         let sent = matches!(
             send_evidence.reconciliation.status,
             SendApplyStatus::SeedProven
-        );
+        ) && send_evidence.reconciliation.job_id.is_some();
+        let warnings = seed_send_apply_warnings(&send_evidence.reconciliation);
 
         Ok(self.seed_send_report_from_parts(
             request,
@@ -1079,10 +1082,7 @@ impl AdminHtmlClient {
             stats_before.len(),
             send_evidence.reconciliation.stats_rows_after,
             Some(send_evidence.reconciliation),
-            vec![
-                "seed send final form was posted after immediate readiness proof and reconciled through the Interspire send loop".to_string(),
-                "provider delivery and recipient render still require external readback".to_string(),
-            ],
+            warnings,
         ))
     }
 
@@ -1258,9 +1258,11 @@ impl AdminHtmlClient {
         }
 
         let send_evidence = self.post_guarded_send_and_reconcile(
-            guarded_send_final_form_post(
+            guarded_send_final_form_post_for_request(
                 self.config.base_url.as_deref().unwrap_or_default(),
                 &final_html,
+                request.campaign_id,
+                &request.list_ids,
             )?,
             &queue_before,
             &stats_before,
@@ -1268,7 +1270,9 @@ impl AdminHtmlClient {
             false,
             max_rows,
         )?;
-        let sent = send_evidence.reconciliation.status.terminal_success();
+        let sent = send_evidence.reconciliation.status.terminal_success()
+            && send_evidence.reconciliation.job_id.is_some();
+        let warnings = production_send_apply_warnings(&send_evidence.reconciliation);
 
         Ok(self.production_send_report_from_parts(
             request,
@@ -1286,10 +1290,7 @@ impl AdminHtmlClient {
             stats_before.len(),
             send_evidence.reconciliation.stats_rows_after,
             Some(send_evidence.reconciliation),
-            vec![
-                "production send final form was posted after immediate readiness proof and reconciled through the Interspire send loop".to_string(),
-                "provider delivery, bounce rate, and recipient engagement require external monitoring".to_string(),
-            ],
+            warnings,
         ))
     }
 
@@ -2372,6 +2373,54 @@ fn guarded_send_final_form_post(
     ))
 }
 
+fn guarded_send_final_form_post_for_request(
+    base_url: &str,
+    html: &str,
+    campaign_id: u64,
+    list_ids: &[u64],
+) -> Result<(Url, Vec<(String, String)>), InterspireError> {
+    let (action_url, mut pairs) = guarded_send_final_form_post(base_url, html)?;
+    bind_guarded_send_request_pairs(&mut pairs, campaign_id, list_ids)?;
+    Ok((action_url, pairs))
+}
+
+fn bind_guarded_send_request_pairs(
+    pairs: &mut Vec<(String, String)>,
+    campaign_id: u64,
+    list_ids: &[u64],
+) -> Result<(), InterspireError> {
+    if list_ids.is_empty() {
+        return Err(InterspireError::Safety(
+            "guarded final send post requires at least one request-bound list id".to_string(),
+        ));
+    }
+
+    // Interspire 8 can render Step4 with selection state held in the session
+    // rather than echoed as final form controls. Only after the no-send proof
+    // has accepted the exact request do we bind those campaign/list ids into
+    // the final POST, so a de-selected HTML control cannot drift the send.
+    upsert_post_pair(pairs, "newsletter", &campaign_id.to_string());
+    pairs.retain(|(name, _)| !is_guarded_send_list_selection_name(name));
+    for list_id in list_ids {
+        pairs.push(("lists[]".to_string(), list_id.to_string()));
+    }
+    Ok(())
+}
+
+fn is_guarded_send_list_selection_name(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "lists[]"
+            | "list[]"
+            | "lists"
+            | "list"
+            | "listid"
+            | "listids"
+            | "mailinglist"
+            | "mailinglistid"
+    )
+}
+
 fn guarded_send_popup_url(base_url: &str, html: &str) -> Result<Option<Url>, InterspireError> {
     for candidate in send_popup_path_candidates(html) {
         if let Ok(url) = safety::ensure_allowed_guarded_send_popup(base_url, &candidate) {
@@ -2433,6 +2482,57 @@ fn send_popup_job_id(url: &Url) -> Option<u64> {
         }
     }
     None
+}
+
+fn seed_send_apply_warnings(reconciliation: &SendReconciliationReport) -> Vec<String> {
+    send_apply_warnings(
+        reconciliation,
+        "seed send",
+        "provider delivery and recipient render still require external readback",
+    )
+}
+
+fn production_send_apply_warnings(reconciliation: &SendReconciliationReport) -> Vec<String> {
+    send_apply_warnings(
+        reconciliation,
+        "production send",
+        "provider delivery, bounce rate, and recipient engagement require external monitoring",
+    )
+}
+
+fn send_apply_warnings(
+    reconciliation: &SendReconciliationReport,
+    label: &str,
+    external_monitoring_warning: &str,
+) -> Vec<String> {
+    let mut warnings = match reconciliation.status {
+        SendApplyStatus::Posted => vec![format!(
+            "{label} final form was posted but remains posted-unproven; no Interspire job, popup, queue, or stats processing proof was found"
+        )],
+        SendApplyStatus::Queued => vec![format!(
+            "{label} reached the guarded Interspire send loop but remains unproven until job id plus queue/stats processing evidence is present"
+        )],
+        SendApplyStatus::TransportFailed => vec![format!(
+            "{label} reached the guarded Interspire send loop but Interspire reported a transport failure"
+        )],
+        SendApplyStatus::Processed
+        | SendApplyStatus::DeliveredUnverified
+        | SendApplyStatus::SeedProven => {
+            vec![
+                format!("{label} final form was posted after immediate readiness proof and reconciled through the Interspire send loop"),
+                external_monitoring_warning.to_string(),
+            ]
+        }
+        SendApplyStatus::Refused => vec![format!(
+            "{label} was refused before the Interspire final send boundary"
+        )],
+    };
+    if reconciliation.status.terminal_success() && reconciliation.job_id.is_none() {
+        warnings.push(format!(
+            "{label} is not marked sent because the Interspire job id was not proven"
+        ));
+    }
+    warnings
 }
 
 fn transport_failure_reason(html: &str) -> Option<String> {
@@ -2981,15 +3081,19 @@ mod tests {
         append_csrf_pair_if_missing, campaign_body_audit_from_html, campaign_body_parts_from_html,
         campaign_body_step1_pairs, campaign_body_step2_action_path, campaign_test_send_digest,
         campaign_test_send_has_applyable_html, campaign_test_send_report, csrf_pair,
-        expected_public_subject_matches, guarded_send_final_form_post, guarded_send_popup_url,
-        list_ids_warning, optional_nonempty_sha256, parse_send_wizard_final_page,
-        preview_send_response_success, recipient_count_marker, selected_or_hidden_list_ids,
+        expected_public_subject_matches, guarded_send_final_form_post,
+        guarded_send_final_form_post_for_request, guarded_send_popup_url, list_ids_warning,
+        optional_nonempty_sha256, parse_send_wizard_final_page, preview_send_response_success,
+        recipient_count_marker, seed_send_apply_warnings, selected_or_hidden_list_ids,
         send_step2_action_path, sha256_hex, transport_failure_reason,
         validate_single_preview_email,
     };
     use crate::{
         redact,
-        response::{CampaignBodyAuditReport, CampaignTestSendApplyRequest},
+        response::{
+            CampaignBodyAuditReport, CampaignTestSendApplyRequest, SendApplyStatus,
+            SendReconciliationReport,
+        },
     };
 
     #[test]
@@ -3359,6 +3463,109 @@ mod tests {
         "#;
 
         assert!(guarded_send_final_form_post("https://example.test/admin/", html).is_err());
+    }
+
+    #[test]
+    fn guarded_send_final_form_post_binds_interspire_8_request_campaign_and_list() {
+        let html = r#"
+            <form action="index.php?Page=Send&Action=Step4&csrfToken=abc">
+              <input type="hidden" name="csrfToken" value="abc">
+              <select name="newsletter">
+                <option value="0" selected>Please select an email campaign</option>
+                <option value="2">Example Campaign</option>
+              </select>
+              <input name="sendfromemail" value="sender@example.invalid">
+              <input type="checkbox" name="trackopens" value="1" checked>
+              <input type="submit" name="SendButton" value="Send now">
+            </form>
+        "#;
+
+        let (url, pairs) =
+            guarded_send_final_form_post_for_request("https://example.test/admin/", html, 2, &[9])
+                .expect("request-bound guarded send final form post");
+
+        assert!(url.as_str().contains("Page=Send&Action=Step4"));
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("newsletter"))
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2"]
+        );
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("lists[]"))
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["9"]
+        );
+        assert!(pairs.contains(&("SendButton".to_string(), "Send now".to_string())));
+    }
+
+    #[test]
+    fn guarded_send_final_form_post_replaces_stale_list_controls() {
+        let html = r#"
+            <form action="index.php?Page=Send&Action=Step4">
+              <input type="hidden" name="newsletter" value="2">
+              <input type="hidden" name="lists[]" value="1">
+              <input type="hidden" name="listid" value="4">
+              <input type="submit" name="SendButton" value="Send now">
+            </form>
+        "#;
+
+        let (_, pairs) =
+            guarded_send_final_form_post_for_request("https://example.test/admin/", html, 2, &[9])
+                .expect("request-bound guarded send final form post");
+
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(name, _)| name.eq_ignore_ascii_case("lists[]"))
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["9"]
+        );
+        assert!(!pairs
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("listid") && value == "4"));
+        assert!(!pairs
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("lists[]") && value == "1"));
+    }
+
+    #[test]
+    fn seed_send_apply_warnings_label_http_200_without_job_as_posted_unproven() {
+        let reconciliation = SendReconciliationReport::new(
+            SendApplyStatus::Posted,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0,
+            2,
+            2,
+            3,
+            3,
+            vec![
+                "final send boundary posted but no popup, queue, or stats processing evidence was found"
+                    .to_string(),
+            ],
+            Vec::new(),
+        );
+
+        let warnings = seed_send_apply_warnings(&reconciliation);
+
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("posted-unproven")));
+        assert!(!warnings
+            .iter()
+            .any(|warning| warning.contains("recipient render still require")));
     }
 
     #[test]

@@ -473,12 +473,17 @@ and do not perform an Interspire send.
 
 Both tools return redacted aggregate evidence plus a post-send reconciliation
 object. HTTP success from the final form post is reported only as `posted`.
+When Interspire 8.x renders the final Step4 page without echoing selected
+campaign/list controls, the send tools bind the final POST to the already
+proven request campaign id and list ids rather than trusting stale form values.
 The tools then follow the allowlisted Interspire popup send loop, reread
 Schedule and Stats, and classify the result as `posted`, `queued`, `processed`,
 `transport_failed`, `delivered_unverified`, or `seed_proven`. The legacy
 `sent` boolean is true only when reconciliation reaches a terminal success
-state. Production sending should still be paired with provider-side monitoring
-and an Ops work item reference.
+state and an Interspire job id was proven. A final form HTTP 200 without a job
+id plus queue/stats movement remains non-successful `posted-unproven` evidence.
+Production sending should still be paired with provider-side monitoring and an
+Ops work item reference.
 
 The OCI ledger path is configured only by `INTERSPIRE_OCI_SEND_LEDGER_PATH`.
 Send requests cannot choose arbitrary ledger files, and the preflight campaign
