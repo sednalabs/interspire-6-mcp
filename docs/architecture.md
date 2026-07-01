@@ -10,10 +10,10 @@ Marketer state in typed, redacted, operator-oriented tools.
 - Authority order: Interspire XML API first, authenticated admin HTML fallback
   only for explicitly allowlisted pages.
 - Output: compact JSON strings shaped for MCP clients and agent workflows.
-- Safety posture: read-only by default, with guarded queue cancel/delete,
-  guarded campaign, list, user, non-secret settings, list creation, campaign
-  copy, semantic template, private artifact, aggregate CSV import preflight,
-  and explicit guarded-send apply paths.
+- Safety posture: read-only by default, with guarded queue
+  cancel/delete/pause/resume, guarded campaign, list, user, non-secret
+  settings, list creation, campaign copy, semantic template, private artifact,
+  aggregate CSV import preflight, and explicit guarded-send apply paths.
 - No-mutation proof posture: selected admin wizard pages may be rendered for
   evidence without submitting a send. The final send form is available only to
   the separate guarded-send apply tools.

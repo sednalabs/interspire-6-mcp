@@ -37,11 +37,11 @@ The MCP server intentionally does not provide tools for:
 - provider API mutation;
 - DNS mutation.
 
-Allowlisted writes are limited to queue cancel/delete, guarded campaign, list,
-user, and non-secret settings edits, list creation, campaign copy, semantic
-template edits, private artifact creation, and explicit guarded send apply
-tools. CSV import preflight is read-only and aggregate-only. Anything outside
-those targets stays blocked.
+Allowlisted writes are limited to queue cancel/delete/pause/resume, guarded
+campaign, list, user, and non-secret settings edits, list creation, campaign
+copy, semantic template edits, private artifact creation, and explicit guarded
+send apply tools. CSV import preflight is read-only and aggregate-only.
+Anything outside those targets stays blocked.
 
 ## Negative Tool Surface
 
@@ -106,8 +106,8 @@ Queue control has two phases.
 Preview:
 
 - reads the Schedule page;
-- finds cancel/delete links inside bounded table rows;
-- validates that each link is a Schedule-page cancel/delete route with a
+- finds cancel/delete/pause/resume links inside bounded table rows;
+- validates that each link is a Schedule-page cancel/delete/pause/resume route with a
   numeric identifier;
 - returns a deterministic plan id, redacted row summary, action, and route
   fingerprint.
@@ -118,15 +118,19 @@ Apply:
 - requires `INTERSPIRE_QUEUE_WRITE_CONTROLS=1`;
 - requires the exact plan id and action from preview;
 - re-reads the Schedule page before apply;
-- applies only the matching Schedule cancel route or one-job Schedule delete
-  form post;
+- applies only the matching Schedule cancel, pause, or resume route or one-job
+  Schedule delete form post;
 - sends Schedule referer/origin context and accepted CSRF token headers for
   guarded queue applies;
 - for delete candidates, may first follow a same-row, same-job Schedule
   `Pause` route when Interspire exposes one, then applies the selected delete
   plan;
 - re-reads the Schedule page after apply;
-- returns before/after counts and evidence.
+- proves cancel/delete by confirming the target no longer exposes allowlisted
+  queue controls;
+- proves pause/resume by confirming the requested action is gone and the
+  expected opposite action appears for the same job;
+- returns before/after counts, action-specific target actions, and evidence.
 
 Queue apply does not authorize sending and does not mutate lists, contacts,
 suppression state, Interspire settings, provider APIs, DNS, or secrets.

@@ -1343,13 +1343,15 @@
       "name": "interspire_production_send_apply"
     },
     {
-      "description": "Apply a previously previewed Interspire scheduled queue cancel/delete plan. Requires guarded write environment flags.",
+      "description": "Apply a previously previewed Interspire scheduled queue cancel/delete/pause/resume plan. Requires guarded write environment flags.",
       "inputSchema": {
         "$defs": {
           "QueueControlAction": {
             "enum": [
               "cancel",
-              "delete"
+              "delete",
+              "pause",
+              "resume"
             ],
             "type": "string"
           }
@@ -1372,7 +1374,7 @@
       "name": "interspire_queue_control_apply"
     },
     {
-      "description": "Preview cancel/delete plan ids for Interspire scheduled queue rows. Preview is read-only.",
+      "description": "Preview cancel/delete/pause/resume plan ids for Interspire scheduled queue rows. Preview is read-only.",
       "inputSchema": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {

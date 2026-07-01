@@ -76,7 +76,8 @@ INTERSPIRE_OCI_SEND_LEDGER_PATH=/secure/private/oci-send-ledger.jsonl
 
 Current public behavior:
 
-- `INTERSPIRE_QUEUE_WRITE_CONTROLS=1` enables guarded queue cancel/delete apply.
+- `INTERSPIRE_QUEUE_WRITE_CONTROLS=1` enables guarded queue
+  cancel/delete/pause/resume apply.
 - `INTERSPIRE_FORM_WRITE_CONTROLS=1` enables guarded campaign, list, user,
   non-secret settings, list-create, and campaign-copy apply.
 - `INTERSPIRE_SEND_CONTROLS=1` enables explicitly acknowledged one-recipient
