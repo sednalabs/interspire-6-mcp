@@ -825,9 +825,12 @@ fn cron_readiness_contract_blocks_when_runner_not_proven() {
         .unwrap_or_else(|err| panic!("{err}"));
 
     assert!(report.ok);
-    assert!(report.application_cron_configured);
+    assert!(!report.application_cron_configured);
     assert!(!report.server_runner_proven);
     assert!(!report.production_send_ready);
+    assert!(report.cron_fields.iter().any(|field| {
+        field.name == "cron_enabled" && field.value_redacted.as_deref() == Some("0")
+    }));
 }
 
 #[test]

@@ -246,15 +246,23 @@ impl CronReadinessReport {
         Self {
             ok: true,
             configured: true,
-            application_cron_configured: true,
+            application_cron_configured: false,
             server_runner_proven: false,
             production_send_ready: false,
-            cron_fields: vec![CronFieldSummary {
-                name: "cron_send".to_string(),
-                value_redacted: Some("5".to_string()),
-            }],
+            cron_fields: vec![
+                CronFieldSummary {
+                    name: "cron_enabled".to_string(),
+                    value_redacted: Some("0".to_string()),
+                },
+                CronFieldSummary {
+                    name: "cron_send".to_string(),
+                    value_redacted: Some("5".to_string()),
+                },
+            ],
             schedule_warnings: vec!["Interspire reports cron.php has not run recently".to_string()],
             warnings: vec![
+                "Interspire master cron checkbox is not enabled".to_string(),
+                "Interspire application cron settings were not proven enabled".to_string(),
                 "server cron runner was not proven by this MCP; production sends should hold"
                     .to_string(),
             ],

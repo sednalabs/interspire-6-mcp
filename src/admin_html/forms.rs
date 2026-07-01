@@ -979,6 +979,9 @@ pub(super) fn parse_form_controls(form: &ElementRef<'_>) -> Vec<FormControl> {
         let Some(name) = input.value().attr("name") else {
             continue;
         };
+        if input.value().attr("disabled").is_some() {
+            continue;
+        }
         let kind = match input
             .value()
             .attr("type")
@@ -1008,6 +1011,9 @@ pub(super) fn parse_form_controls(form: &ElementRef<'_>) -> Vec<FormControl> {
         let Some(name) = textarea.value().attr("name") else {
             continue;
         };
+        if textarea.value().attr("disabled").is_some() {
+            continue;
+        }
         controls.push(FormControl {
             original_name: name.to_string(),
             lower_name: name.to_ascii_lowercase(),
@@ -1021,6 +1027,9 @@ pub(super) fn parse_form_controls(form: &ElementRef<'_>) -> Vec<FormControl> {
         let Some(name) = select.value().attr("name") else {
             continue;
         };
+        if select.value().attr("disabled").is_some() {
+            continue;
+        }
         let selected_options = select
             .select(&option_selector)
             .filter(|option| option.value().attr("selected").is_some())
@@ -1347,6 +1356,10 @@ pub(super) fn should_replay_hidden_control(control: &FormControl) -> bool {
             | "campaignid"
             | "templateid"
             | "segmentid"
+            // Interspire 8 renders Application URL as a disabled text field
+            // plus this hidden control, and Settings::Save rebuilds the full
+            // config file from POST on every settings tab save.
+            | "application_url"
             // Interspire campaign Step2 can carry the selected Step1 body
             // format as hidden wizard state into the final Complete save.
             | "format"
@@ -1587,6 +1600,13 @@ mod tests {
                     checked: true,
                 },
                 FormControl {
+                    original_name: "application_url".to_string(),
+                    lower_name: "application_url".to_string(),
+                    kind: FormControlKind::Hidden,
+                    value: "https://newsletter.example.invalid".to_string(),
+                    checked: true,
+                },
+                FormControl {
                     original_name: "dangerous_hidden_flag".to_string(),
                     lower_name: "dangerous_hidden_flag".to_string(),
                     kind: FormControlKind::Hidden,
@@ -1627,12 +1647,57 @@ mod tests {
         assert!(pairs
             .iter()
             .any(|(name, value)| name == "tab_num" && value == "4"));
+        assert!(pairs.iter().any(|(name, value)| {
+            name == "application_url" && value == "https://newsletter.example.invalid"
+        }));
         assert!(!pairs
             .iter()
             .any(|(name, _)| name == "dangerous_hidden_flag"));
         assert!(pairs
             .iter()
             .any(|(name, value)| name == "SubmitButton1" && value == "Save"));
+    }
+
+    #[test]
+    fn disabled_application_url_text_is_not_posted_but_hidden_state_is_preserved() {
+        let html = r#"
+            <form method="post" action="index.php?Page=Settings&Action=Save">
+                <input type="text" name="Application_URL" value="http://stale.example.invalid" disabled>
+                <input type="hidden" name="application_url" value="https://newsletter.example.invalid">
+                <input type="checkbox" name="cron_enabled" value="1" checked>
+                <input type="submit" name="SubmitButton1" value="Save">
+            </form>
+        "#;
+        let document = Html::parse_document(html);
+        let form_selector =
+            Selector::parse("form").unwrap_or_else(|err| panic!("selector parse failed: {err}"));
+        let form = document
+            .select(&form_selector)
+            .next()
+            .unwrap_or_else(|| panic!("expected form"));
+        let controls = parse_form_controls(&form);
+
+        assert!(controls.iter().any(|control| {
+            control.lower_name == "application_url"
+                && control.kind == FormControlKind::Hidden
+                && control.value == "https://newsletter.example.invalid"
+        }));
+        assert!(!controls.iter().any(|control| {
+            control.original_name == "Application_URL" && control.kind == FormControlKind::Text
+        }));
+
+        let snapshot = FormSnapshot {
+            action_url: Url::parse("https://example.test/admin/index.php")
+                .unwrap_or_else(|err| panic!("{err}")),
+            controls,
+        };
+        let requested_fields = BTreeSet::from(["cron_enabled".to_string()]);
+        let pairs = snapshot.to_post_pairs_for_fields(&requested_fields);
+
+        assert!(pairs.iter().any(|(name, value)| {
+            name == "application_url" && value == "https://newsletter.example.invalid"
+        }));
+        assert!(!pairs.iter().any(|(name, _)| name == "Application_URL"));
     }
 
     #[test]

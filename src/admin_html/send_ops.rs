@@ -92,12 +92,8 @@ impl AdminHtmlClient {
                 .join(" "),
         );
         let schedule_warnings = cron_schedule_warnings(&schedule_text);
-        let application_cron_configured = cron_fields.iter().any(|field| {
-            field
-                .value_redacted
-                .as_deref()
-                .is_some_and(looks_enabled_cron_value)
-        });
+        let cron_master_enabled = cron_master_enabled_from_fields(&cron_fields);
+        let application_cron_configured = cron_master_enabled == Some(true);
         let server_runner_proven =
             schedule_warnings.is_empty() && contains_cron_detected_positive(&schedule_text);
         if application_cron_configured && !server_runner_proven {
@@ -105,6 +101,18 @@ impl AdminHtmlClient {
                 "Interspire cron settings appear enabled, but a server cron runner was not proven"
                     .to_string(),
             );
+        }
+        match cron_master_enabled {
+            Some(false) => {
+                warnings.push("Interspire master cron checkbox is not enabled".to_string());
+            }
+            None => {
+                warnings.push(
+                    "Interspire master cron checkbox state was not proven; interval settings alone do not enable cron"
+                        .to_string(),
+                );
+            }
+            Some(true) => {}
         }
         if !application_cron_configured {
             warnings
@@ -537,13 +545,30 @@ fn cron_fields_from_settings_fields(fields: Vec<RedactedField>) -> Vec<CronField
 }
 
 fn cron_fields_from_inventory_section(section: &SettingsInventorySection) -> Vec<CronFieldSummary> {
-    section
+    let mut fields = section
         .fields
         .iter()
         .filter(|field| field.name.to_ascii_lowercase().contains("cron"))
         .cloned()
         .map(cron_field_summary)
-        .collect()
+        .collect::<Vec<_>>();
+    fields.extend(
+        section
+            .omitted_fields
+            .iter()
+            .filter(|field| {
+                field.name.to_ascii_lowercase().contains("cron")
+                    && field
+                        .reason
+                        .to_ascii_lowercase()
+                        .contains("unchecked control")
+            })
+            .map(|field| CronFieldSummary {
+                name: field.name.clone(),
+                value_redacted: Some("0".to_string()),
+            }),
+    );
+    fields
 }
 
 fn cron_field_summary(field: RedactedField) -> CronFieldSummary {
@@ -566,6 +591,14 @@ fn looks_enabled_cron_value(value: &str) -> bool {
     )
 }
 
+fn cron_master_enabled_from_fields(fields: &[CronFieldSummary]) -> Option<bool> {
+    fields
+        .iter()
+        .find(|field| field.name.eq_ignore_ascii_case("cron_enabled"))
+        .and_then(|field| field.value_redacted.as_deref())
+        .map(looks_enabled_cron_value)
+}
+
 fn cron_schedule_warnings(schedule_text: &str) -> Vec<String> {
     let lower = schedule_text.to_ascii_lowercase();
     let mut warnings = Vec::new();
@@ -580,9 +613,7 @@ fn cron_schedule_warnings(schedule_text: &str) -> Vec<String> {
 
 fn contains_cron_detected_positive(schedule_text: &str) -> bool {
     let lower = schedule_text.to_ascii_lowercase();
-    lower.contains("cron")
-        && (lower.contains("last run") || lower.contains("detected"))
-        && !contains_cron_negative_phrase(&lower)
+    lower.contains("cron") && lower.contains("detected") && !contains_cron_negative_phrase(&lower)
 }
 
 fn contains_cron_negative_phrase(lower_schedule_text: &str) -> bool {
@@ -628,6 +659,14 @@ mod tests {
             "Cron status: Last Run 2026-07-01. Repeat: Never. Do not close this window.";
 
         assert!(cron_schedule_warnings(schedule_text).is_empty());
+        assert!(!contains_cron_detected_positive(schedule_text));
+    }
+
+    #[test]
+    fn cron_readiness_requires_explicit_detected_positive_text() {
+        let schedule_text = "Cron status: cron has been detected and is running.";
+
+        assert!(cron_schedule_warnings(schedule_text).is_empty());
         assert!(contains_cron_detected_positive(schedule_text));
     }
 
@@ -660,6 +699,62 @@ mod tests {
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].name, "cron_enabled");
         assert_eq!(fields[1].name, "cron_send");
+    }
+
+    #[test]
+    fn cron_readiness_requires_master_cron_checkbox_not_only_intervals() {
+        let interval_only = vec![cron_field_summary(RedactedField {
+            name: "cron_send".to_string(),
+            value: Some("5".to_string()),
+        })];
+        assert_eq!(cron_master_enabled_from_fields(&interval_only), None);
+
+        let disabled_master = vec![
+            cron_field_summary(RedactedField {
+                name: "cron_enabled".to_string(),
+                value: Some("0".to_string()),
+            }),
+            cron_field_summary(RedactedField {
+                name: "cron_send".to_string(),
+                value: Some("5".to_string()),
+            }),
+        ];
+        assert_eq!(
+            cron_master_enabled_from_fields(&disabled_master),
+            Some(false)
+        );
+
+        let enabled_master = vec![cron_field_summary(RedactedField {
+            name: "cron_enabled".to_string(),
+            value: Some("1".to_string()),
+        })];
+        assert_eq!(cron_master_enabled_from_fields(&enabled_master), Some(true));
+    }
+
+    #[test]
+    fn unchecked_inventory_cron_checkbox_is_reported_as_disabled_master() {
+        let section = SettingsInventorySection {
+            name: "cron".to_string(),
+            fields: vec![RedactedField {
+                name: "cron_send".to_string(),
+                value: Some("5".to_string()),
+            }],
+            omitted_fields: vec![crate::response::SettingsInventoryOmittedField {
+                name: "cron_enabled".to_string(),
+                reason: "unchecked control omitted".to_string(),
+            }],
+            total_control_count: 2,
+            returned_field_count: 1,
+            omitted_field_count: 1,
+            capped: false,
+        };
+
+        let fields = cron_fields_from_inventory_section(&section);
+
+        assert!(fields.iter().any(|field| {
+            field.name == "cron_enabled" && field.value_redacted.as_deref() == Some("0")
+        }));
+        assert_eq!(cron_master_enabled_from_fields(&fields), Some(false));
     }
 
     #[test]
