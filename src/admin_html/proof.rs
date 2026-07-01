@@ -712,8 +712,8 @@ impl AdminHtmlClient {
         report.queue_rows_after = queue_after.len();
         report.stats_rows_before = stats_before.len();
         report.stats_rows_after = stats_after.len();
-        report.queue_unchanged = queue_before == queue_after;
-        report.stats_unchanged = stats_before == stats_after;
+        report.queue_unchanged = rows_unchanged_for_send_proof(&queue_before, &queue_after);
+        report.stats_unchanged = rows_unchanged_for_send_proof(&stats_before, &stats_after);
 
         if !report.queue_unchanged {
             report
@@ -1436,9 +1436,9 @@ impl AdminHtmlClient {
             &self.get_allowed(&AdminReadPage::Stats.path())?,
             input.max_rows,
         )?;
-        let stats_increased = stats_after.len() > input.stats_before.len();
-        let queued = queue_after.len() > input.queue_before.len();
-        let sent_count = if stats_increased || popup_steps > 0 {
+        let stats_changed = rows_changed_for_send_proof(input.stats_before, &stats_after);
+        let queued = rows_changed_for_send_proof(input.queue_before, &queue_after);
+        let sent_count = if stats_changed || popup_steps > 0 {
             Some(input.expected_recipient_count)
         } else {
             None
@@ -1447,15 +1447,15 @@ impl AdminHtmlClient {
         let unsent_count = if smtp_reason.is_some() {
             Some(input.expected_recipient_count)
         } else {
-            Some(0).filter(|_| stats_increased || popup_steps > 0)
+            Some(0).filter(|_| stats_changed || popup_steps > 0)
         };
         let mut proof_gaps = Vec::new();
         let status = if smtp_reason.is_some() {
             SendApplyStatus::TransportFailed
-        } else if stats_increased && input.seed_send {
+        } else if stats_changed && input.seed_send {
             proof_gaps.push("provider inbox delivery still requires external readback".to_string());
             SendApplyStatus::SeedProven
-        } else if stats_increased {
+        } else if stats_changed {
             proof_gaps.push(
                 "provider delivery, bounces, and complaints require external monitoring"
                     .to_string(),
@@ -1475,11 +1475,11 @@ impl AdminHtmlClient {
             proof_gaps
                 .push("Interspire job id was not found in redacted send-loop evidence".to_string());
         }
-        if stats_increased {
-            popup_notes.push("Stats row count increased after guarded send loop".to_string());
+        if stats_changed {
+            popup_notes.push("Stats rows changed after guarded send loop".to_string());
         }
         if queued {
-            popup_notes.push("Schedule row count increased after guarded send loop".to_string());
+            popup_notes.push("Schedule rows changed after guarded send loop".to_string());
         }
         let follow_up_contract = if matches!(status, SendApplyStatus::Queued) {
             job_id.map(|job_id| {
@@ -1606,8 +1606,8 @@ impl AdminHtmlClient {
         report.queue_rows_after = queue_after.len();
         report.stats_rows_before = stats_before.len();
         report.stats_rows_after = stats_after.len();
-        report.queue_unchanged = queue_before == queue_after;
-        report.stats_unchanged = stats_before == stats_after;
+        report.queue_unchanged = rows_unchanged_for_send_proof(&queue_before, &queue_after);
+        report.stats_unchanged = rows_unchanged_for_send_proof(&stats_before, &stats_after);
 
         if !report.queue_unchanged {
             report
@@ -2474,12 +2474,27 @@ fn bind_guarded_send_request_pairs(
     // rather than echoed as final form controls. Only after the no-send proof
     // has accepted the exact request do we bind those campaign/list ids into
     // the final POST, so a de-selected HTML control cannot drift the send.
-    upsert_post_pair(pairs, "newsletter", &campaign_id.to_string());
-    pairs.retain(|(name, _)| !is_guarded_send_list_selection_name(name));
+    pairs.retain(|(name, _)| {
+        !is_guarded_send_campaign_selection_name(name) && !is_guarded_send_list_selection_name(name)
+    });
+    pairs.push(("newsletter".to_string(), campaign_id.to_string()));
     for list_id in list_ids {
         pairs.push(("lists[]".to_string(), list_id.to_string()));
     }
     Ok(())
+}
+
+fn is_guarded_send_campaign_selection_name(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "newsletter"
+            | "newsletterid"
+            | "newsletter_id"
+            | "newsletterchosen"
+            | "campaign"
+            | "campaignid"
+            | "campaign_id"
+    )
 }
 
 fn is_guarded_send_list_selection_name(name: &str) -> bool {
@@ -2494,6 +2509,36 @@ fn is_guarded_send_list_selection_name(name: &str) -> bool {
             | "mailinglist"
             | "mailinglistid"
     )
+}
+
+fn rows_changed_for_send_proof(before: &[String], after: &[String]) -> bool {
+    !rows_unchanged_for_send_proof(before, after)
+}
+
+fn rows_unchanged_for_send_proof(before: &[String], after: &[String]) -> bool {
+    stable_table_rows_for_send_proof(before) == stable_table_rows_for_send_proof(after)
+}
+
+fn stable_table_rows_for_send_proof(rows: &[String]) -> Vec<String> {
+    rows.iter()
+        .filter_map(|row| stable_table_row_for_send_proof(row))
+        .collect()
+}
+
+fn stable_table_row_for_send_proof(row: &str) -> Option<String> {
+    let compact = compact_text(row);
+    let lower = compact.to_ascii_lowercase();
+    if lower.contains("updatecrontimer(")
+        || lower.starts_with("view scheduled email queue")
+        || lower.starts_with("any emails you have scheduled")
+        || lower.starts_with("email campaign statistics")
+        || lower.starts_with("email campaign name chevron")
+        || lower.starts_with("choose an action delete export print results per page")
+        || lower.starts_with("results per page:")
+    {
+        return None;
+    }
+    Some(compact)
 }
 
 fn guarded_send_popup_url(base_url: &str, html: &str) -> Result<Option<Url>, InterspireError> {
@@ -3157,10 +3202,11 @@ mod tests {
         campaign_body_step1_pairs, campaign_body_step2_action_path, campaign_test_send_digest,
         campaign_test_send_has_applyable_html, campaign_test_send_report, csrf_pair,
         expected_public_subject_matches, guarded_send_final_form_post,
-        guarded_send_final_form_post_for_request, guarded_send_popup_url, list_ids_warning,
-        optional_nonempty_sha256, parse_send_wizard_final_page, preview_send_response_success,
-        recipient_count_marker, seed_send_apply_warnings, selected_or_hidden_list_ids,
-        send_step2_action_path, sha256_hex, transport_failure_reason,
+        guarded_send_final_form_post_for_request, guarded_send_popup_url,
+        is_guarded_send_campaign_selection_name, list_ids_warning, optional_nonempty_sha256,
+        parse_send_wizard_final_page, preview_send_response_success, recipient_count_marker,
+        rows_changed_for_send_proof, rows_unchanged_for_send_proof, seed_send_apply_warnings,
+        selected_or_hidden_list_ids, send_step2_action_path, sha256_hex, transport_failure_reason,
         validate_single_preview_email,
     };
     use crate::{
@@ -3630,6 +3676,57 @@ mod tests {
         assert!(!pairs
             .iter()
             .any(|(name, value)| name.eq_ignore_ascii_case("lists[]") && value == "1"));
+    }
+
+    #[test]
+    fn guarded_send_final_form_post_replaces_all_stale_campaign_controls() {
+        let html = r#"
+            <form action="index.php?Page=Send&Action=Step4">
+              <input type="hidden" name="newsletter" value="1">
+              <input type="hidden" name="NewsletterChosen" value="1">
+              <select name="campaignid">
+                <option value="1" selected>Old Campaign</option>
+                <option value="2">Requested Campaign</option>
+              </select>
+              <input type="hidden" name="lists[]" value="9">
+              <input type="submit" name="SendButton" value="Send now">
+            </form>
+        "#;
+
+        let (_, pairs) =
+            guarded_send_final_form_post_for_request("https://example.test/admin/", html, 2, &[9])
+                .expect("request-bound guarded send final form post");
+
+        assert_eq!(
+            pairs
+                .iter()
+                .filter(|(name, _)| is_guarded_send_campaign_selection_name(name))
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("newsletter", "2")]
+        );
+    }
+
+    #[test]
+    fn send_proof_table_rows_ignore_interspire_chrome_timer_churn() {
+        let before = vec![
+            "Any emails you have scheduled to be sent out are shown below. UpdateCronTimer('173', 300, true);".to_string(),
+            "Results per page: 10 50 100".to_string(),
+            "Copy of iTWire Update Example Email Campaign 'Clean List' July 1 2026, 11:41 am Complete View Delete".to_string(),
+        ];
+        let after = vec![
+            "Any emails you have scheduled to be sent out are shown below. UpdateCronTimer('169', 300, true);".to_string(),
+            "Results per page: 10 50 100".to_string(),
+            "Copy of iTWire Update Example Email Campaign 'Clean List' July 1 2026, 11:41 am Complete View Delete".to_string(),
+        ];
+        let changed_data = vec![
+            "Any emails you have scheduled to be sent out are shown below. UpdateCronTimer('168', 300, true);".to_string(),
+            "Results per page: 10 50 100".to_string(),
+            "Copy of iTWire Update Example Email Campaign 'Another Clean List' July 1 2026, 11:41 am Complete View Delete".to_string(),
+        ];
+
+        assert!(rows_unchanged_for_send_proof(&before, &after));
+        assert!(rows_changed_for_send_proof(&before, &changed_data));
     }
 
     #[test]
