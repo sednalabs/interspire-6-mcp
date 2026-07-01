@@ -114,6 +114,8 @@ The prepare tools:
 - require the manifest to be a direct child of the configured ledger directory;
 - require the configured ledger path to come from
   `INTERSPIRE_OCI_SEND_LEDGER_PATH`;
+- require the ledger directory, manifest file, and any existing ledger file to
+  be private on Unix, with no group/other permissions;
 - hash raw recipient, message, correlation, and header values before writing
   ledger rows;
 - return only hashes, counts, plan state, and preflight proof;

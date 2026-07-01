@@ -485,6 +485,8 @@ Send requests cannot choose arbitrary ledger files, and the preflight campaign
 token must match the Interspire campaign id in the send request. Ledger
 preflight output returns hashes and counts only; it does not return raw
 recipients, raw campaign identifiers, private file paths, or provider payloads.
+The ledger directory, private manifest, and any existing ledger file must not be
+readable, writable, or executable by group or other users on Unix systems.
 
 ### No-Mutation Send Proof
 

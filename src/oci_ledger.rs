@@ -13,7 +13,7 @@ use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
 };
 
@@ -91,11 +91,7 @@ pub fn verify_preflight(
         }
     }
 
-    let Some(path) = config
-        .path
-        .as_deref()
-        .filter(|path| !path.trim().is_empty())
-    else {
+    if !configured {
         return OciLedgerPreflightReport::blocked(
             required,
             false,
@@ -103,8 +99,25 @@ pub fn verify_preflight(
             "INTERSPIRE_OCI_SEND_LEDGER_PATH is not configured; guarded send refused before the Interspire final send boundary"
                 .to_string(),
         );
+    }
+    let path = match private_ledger_path(config) {
+        Ok(path) => path,
+        Err(err) => {
+            return OciLedgerPreflightReport::blocked(
+                required,
+                true,
+                Some(request),
+                format!(
+                    "configured OCI send ledger did not satisfy private path policy; guarded send refused before the Interspire final send boundary: {err}"
+                ),
+            );
+        }
     };
-    let Ok(file) = File::open(path) else {
+    let Ok(file) = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)
+    else {
         return OciLedgerPreflightReport::blocked(
             required,
             true,
@@ -205,8 +218,8 @@ pub fn verify_preflight(
         configured: true,
         requested: true,
         verified: warnings.is_empty(),
-        campaign_hash: Some(ledger_hash(&request.campaign_id)),
-        batch_hash: Some(ledger_hash(&request.batch_id)),
+        campaign_hash: Some(ledger_hash(request.campaign_id.trim())),
+        batch_hash: Some(ledger_hash(request.batch_id.trim())),
         sender_domain: request
             .sender_domain
             .as_ref()
@@ -712,7 +725,7 @@ fn prepared_rows_already_present(path: &Path, rows: &[String]) -> Result<bool, I
     if expected.is_empty() {
         return Ok(false);
     }
-    let mut file = OpenOptions::new()
+    let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)
@@ -721,11 +734,10 @@ fn prepared_rows_already_present(path: &Path, rows: &[String]) -> Result<bool, I
                 "failed to open private OCI send ledger for read: {err}"
             ))
         })?;
-    let mut body = String::new();
-    file.read_to_string(&mut body).map_err(|err| {
-        InterspireError::Io(format!("failed to read private OCI send ledger: {err}"))
-    })?;
-    for line in body.lines() {
+    for line in BufReader::new(file).lines() {
+        let line = line.map_err(|err| {
+            InterspireError::Io(format!("failed to read private OCI send ledger: {err}"))
+        })?;
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -878,12 +890,14 @@ fn private_ledger_path(config: &OciSendLedgerConfig) -> Result<PathBuf, Interspi
             "OCI send ledger parent must be a real private directory".to_string(),
         ));
     }
+    ensure_private_unix_permissions(&parent_metadata, "OCI send ledger parent")?;
     if let Ok(metadata) = fs::symlink_metadata(&path) {
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(InterspireError::Safety(
                 "OCI send ledger path must be a regular file when it already exists".to_string(),
             ));
         }
+        ensure_private_unix_permissions(&metadata, "OCI send ledger")?;
     }
     Ok(path)
 }
@@ -910,12 +924,25 @@ fn private_manifest_path(ledger_path: &Path, raw_path: &str) -> Result<PathBuf, 
             "OCI send ledger manifest must be a regular private file".to_string(),
         ));
     }
+    ensure_private_unix_permissions(&metadata, "OCI send ledger manifest")?;
     if metadata.len() == 0 || metadata.len() > MAX_LEDGER_MANIFEST_BYTES {
         return Err(InterspireError::Safety(format!(
             "OCI send ledger manifest size must be between 1 and {MAX_LEDGER_MANIFEST_BYTES} bytes"
         )));
     }
     Ok(path)
+}
+
+fn ensure_private_unix_permissions(
+    metadata: &fs::Metadata,
+    label: &str,
+) -> Result<(), InterspireError> {
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(InterspireError::Safety(format!(
+            "{label} must not be readable, writable, or executable by group or others"
+        )));
+    }
+    Ok(())
 }
 
 fn ensure_private_direct_child_path(path: &Path, label: &str) -> Result<(), InterspireError> {
@@ -996,7 +1023,7 @@ fn prepare_manifest_rows(
 ) -> Result<PreparedManifestRows, InterspireError> {
     let campaign_id = request.campaign_id.trim();
     let campaign_hash = ledger_hash(campaign_id);
-    let batch_hash = ledger_hash(&request.batch_id);
+    let batch_hash = ledger_hash(request.batch_id.trim());
     let approved_sender_hash = request
         .approved_sender
         .as_deref()
@@ -1331,6 +1358,7 @@ mod tests {
     use super::*;
     use std::{
         fs,
+        os::unix::fs::PermissionsExt,
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -1338,8 +1366,7 @@ mod tests {
     #[test]
     fn preflight_verifies_matching_private_ledger_rows_without_raw_output() {
         let path = fixture_path("valid");
-        fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
-        fs::write(
+        write_private_fixture(
             &path,
             format!(
                 "{{\"campaign_hash\":\"{}\",\"batch_hash\":\"{}\",\"sender\":\"news@example.invalid\",\"recipient_hash\":\"{}\",\"message_id_hash\":\"{}\"}}\n\
@@ -1349,8 +1376,7 @@ mod tests {
                 ledger_hash("person@example.invalid"),
                 ledger_hash("msg-1")
             ),
-        )
-        .expect("write fixture");
+        );
         let report = verify_preflight(
             &OciSendLedgerConfig {
                 path: Some(path.to_string_lossy().to_string()),
@@ -1381,8 +1407,7 @@ mod tests {
     #[test]
     fn preflight_blocks_missing_rows_when_required() {
         let path = fixture_path("missing");
-        fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
-        fs::write(&path, "").expect("write fixture");
+        write_private_fixture(&path, "");
         let report = verify_preflight(
             &OciSendLedgerConfig {
                 path: Some(path.to_string_lossy().to_string()),
@@ -1433,17 +1458,60 @@ mod tests {
     }
 
     #[test]
+    fn preflight_rejects_world_readable_existing_ledger() {
+        let path = fixture_path("world-readable-ledger");
+        fs::write(
+            &path,
+            format!(
+                "{{\"campaign_hash\":\"{}\",\"batch_hash\":\"{}\",\"sender_domain\":\"example.invalid\",\"recipient_hash\":\"{}\",\"message_id_hash\":\"{}\"}}\n",
+                ledger_hash("campaign-private"),
+                ledger_hash("batch-private"),
+                ledger_hash("person@example.invalid"),
+                ledger_hash("msg-1")
+            ),
+        )
+        .expect("write fixture");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("chmod fixture ledger");
+
+        let report = verify_preflight(
+            &OciSendLedgerConfig {
+                path: Some(path.to_string_lossy().to_string()),
+                required_for_sends: true,
+            },
+            Some(&OciLedgerPreflightRequest {
+                campaign_id: "campaign-private".to_string(),
+                batch_id: "batch-private".to_string(),
+                expected_rows: 1,
+                sender_domain: Some("example.invalid".to_string()),
+                expected_manifest_sha256: None,
+            }),
+            1,
+            None,
+        );
+
+        assert!(!report.verified);
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("private path policy")));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn prepare_preview_builds_private_plan_without_writing_or_exposing_manifest_values() {
-        const LEDGER: &str = "/tmp/interspire-mcp-oci-prepare-preview-ledger.jsonl";
-        const MANIFEST: &str = "/tmp/interspire-mcp-oci-prepare-preview-manifest.jsonl";
+        const LEDGER: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-prepare-preview-ledger.jsonl";
+        const MANIFEST: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-prepare-preview-manifest.jsonl";
+        prepare_private_fixture_parent(LEDGER);
         let _ = fs::remove_file(LEDGER);
         let _ = fs::remove_file(MANIFEST);
-        fs::write(
+        write_private_fixture(
             MANIFEST,
             "{\"recipient_email\":\"person-one@example.invalid\",\"correlation_id\":\"trace-one\"}\n\
              {\"recipient_id\":\"subscriber-two\",\"header_value\":\"trace-two\"}\n",
-        )
-        .expect("write manifest");
+        );
 
         let report = prepare_preview(
             &OciSendLedgerConfig {
@@ -1479,24 +1547,67 @@ mod tests {
     }
 
     #[test]
-    fn prepare_apply_writes_sanitized_rows_and_verifies_preflight() {
-        const LEDGER: &str = "/tmp/interspire-mcp-oci-prepare-apply-ledger.jsonl";
-        const MANIFEST: &str = "/tmp/interspire-mcp-oci-prepare-apply-manifest.jsonl";
+    fn prepare_preview_rejects_world_readable_manifest() {
+        const LEDGER: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-readable-manifest-ledger.jsonl";
+        const MANIFEST: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-readable-manifest.jsonl";
+        prepare_private_fixture_parent(LEDGER);
         let _ = fs::remove_file(LEDGER);
         let _ = fs::remove_file(MANIFEST);
         fs::write(
             MANIFEST,
-            "{\"recipient_email\":\"person-one@example.invalid\",\"message_id\":\"provider-message-one\"}\n\
-             {\"recipient_id\":\"subscriber-two\",\"correlation_id\":\"trace-two\"}\n",
+            "{\"recipient_email\":\"person-one@example.invalid\",\"message_id\":\"provider-message-one\"}\n",
         )
         .expect("write manifest");
+        fs::set_permissions(MANIFEST, fs::Permissions::from_mode(0o644)).expect("chmod manifest");
+
+        let err = prepare_preview(
+            &OciSendLedgerConfig {
+                path: Some(LEDGER.to_string()),
+                required_for_sends: true,
+            },
+            &OciSendLedgerPreparePreviewRequest {
+                campaign_id: "7".to_string(),
+                batch_id: "batch-private".to_string(),
+                expected_rows: 1,
+                sender_domain: "example.invalid".to_string(),
+                manifest_path: MANIFEST.to_string(),
+                expected_manifest_sha256: None,
+                approved_sender: None,
+                template_sha256: None,
+                subject_sha256: None,
+            },
+        )
+        .expect_err("world-readable manifest should be rejected");
+
+        assert!(matches!(err, InterspireError::Safety(_)));
+        assert!(err.to_string().contains("group or others"));
+        assert!(!Path::new(LEDGER).exists());
+        let _ = fs::remove_file(MANIFEST);
+    }
+
+    #[test]
+    fn prepare_apply_writes_sanitized_rows_and_verifies_preflight() {
+        const LEDGER: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-prepare-apply-ledger.jsonl";
+        const MANIFEST: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-prepare-apply-manifest.jsonl";
+        prepare_private_fixture_parent(LEDGER);
+        let _ = fs::remove_file(LEDGER);
+        let _ = fs::remove_file(MANIFEST);
+        write_private_fixture(
+            MANIFEST,
+            "{\"recipient_email\":\"person-one@example.invalid\",\"message_id\":\"provider-message-one\"}\n\
+             {\"recipient_id\":\"subscriber-two\",\"correlation_id\":\"trace-two\"}\n",
+        );
         let ledger_config = OciSendLedgerConfig {
             path: Some(LEDGER.to_string()),
             required_for_sends: true,
         };
         let preview_request = OciSendLedgerPreparePreviewRequest {
             campaign_id: "7".to_string(),
-            batch_id: "batch-private".to_string(),
+            batch_id: " batch-private ".to_string(),
             expected_rows: 2,
             sender_domain: "example.invalid".to_string(),
             manifest_path: MANIFEST.to_string(),
@@ -1538,6 +1649,7 @@ mod tests {
         assert_eq!(report.appended_rows, 2);
         assert!(report.oci_ledger_preflight.verified);
         assert_eq!(report.oci_ledger_preflight.matched_rows, 2);
+        assert_eq!(report.batch_hash, ledger_hash("batch-private"));
         assert!(!report.send_authorized);
         assert!(!report.production_send_authorized);
         assert!(!body.contains("person-one@example.invalid"));
@@ -1556,15 +1668,17 @@ mod tests {
 
     #[test]
     fn prepare_apply_refuses_preflight_valid_but_different_existing_rows() {
-        const LEDGER: &str = "/tmp/interspire-mcp-oci-existing-mismatch-ledger.jsonl";
-        const MANIFEST: &str = "/tmp/interspire-mcp-oci-existing-mismatch-manifest.jsonl";
+        const LEDGER: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-existing-mismatch-ledger.jsonl";
+        const MANIFEST: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-existing-mismatch-manifest.jsonl";
+        prepare_private_fixture_parent(LEDGER);
         let _ = fs::remove_file(LEDGER);
         let _ = fs::remove_file(MANIFEST);
-        fs::write(
+        write_private_fixture(
             MANIFEST,
             "{\"recipient_email\":\"person-one@example.invalid\",\"message_id\":\"provider-message-one\"}\n",
-        )
-        .expect("write manifest");
+        );
         let ledger_config = OciSendLedgerConfig {
             path: Some(LEDGER.to_string()),
             required_for_sends: true,
@@ -1583,7 +1697,7 @@ mod tests {
         let preview =
             prepare_preview(&ledger_config, &preview_request).unwrap_or_else(|err| panic!("{err}"));
         let manifest_sha256 = preview.manifest_sha256.clone().expect("manifest sha");
-        fs::write(
+        write_private_fixture(
             LEDGER,
             format!(
                 "{{\"campaign_id\":\"7\",\"batch_hash\":\"{}\",\"sender_domain\":\"example.invalid\",\"manifest_sha256\":\"{}\",\"recipient_hash\":\"{}\",\"message_id_hash\":\"{}\"}}\n",
@@ -1592,8 +1706,7 @@ mod tests {
                 ledger_hash("different-recipient"),
                 ledger_hash("different-message")
             ),
-        )
-        .expect("write existing ledger");
+        );
 
         let report = prepare_apply(
             &GuardedWriteConfig {
@@ -1634,15 +1747,17 @@ mod tests {
 
     #[test]
     fn prepare_apply_is_idempotent_for_exact_prepared_rows() {
-        const LEDGER: &str = "/tmp/interspire-mcp-oci-idempotent-ledger.jsonl";
-        const MANIFEST: &str = "/tmp/interspire-mcp-oci-idempotent-manifest.jsonl";
+        const LEDGER: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-idempotent-ledger.jsonl";
+        const MANIFEST: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-idempotent-manifest.jsonl";
+        prepare_private_fixture_parent(LEDGER);
         let _ = fs::remove_file(LEDGER);
         let _ = fs::remove_file(MANIFEST);
-        fs::write(
+        write_private_fixture(
             MANIFEST,
             "{\"recipient_email\":\"person-one@example.invalid\",\"correlation_id\":\"trace-one\"}\n",
-        )
-        .expect("write manifest");
+        );
         let ledger_config = OciSendLedgerConfig {
             path: Some(LEDGER.to_string()),
             required_for_sends: true,
@@ -1707,15 +1822,17 @@ mod tests {
 
     #[test]
     fn prepare_apply_refuses_stale_plan_without_writing() {
-        const LEDGER: &str = "/tmp/interspire-mcp-oci-stale-plan-ledger.jsonl";
-        const MANIFEST: &str = "/tmp/interspire-mcp-oci-stale-plan-manifest.jsonl";
+        const LEDGER: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-stale-plan-ledger.jsonl";
+        const MANIFEST: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-stale-plan-manifest.jsonl";
+        prepare_private_fixture_parent(LEDGER);
         let _ = fs::remove_file(LEDGER);
         let _ = fs::remove_file(MANIFEST);
-        fs::write(
+        write_private_fixture(
             MANIFEST,
             "{\"recipient_email\":\"person-one@example.invalid\",\"correlation_id\":\"trace-one\"}\n",
-        )
-        .expect("write manifest");
+        );
         let report = prepare_apply(
             &GuardedWriteConfig {
                 enabled: true,
@@ -1751,17 +1868,20 @@ mod tests {
 
     #[test]
     fn prepare_apply_refuses_when_lock_exists() {
-        const LEDGER: &str = "/tmp/interspire-mcp-oci-locked-ledger.jsonl";
-        const MANIFEST: &str = "/tmp/interspire-mcp-oci-locked-manifest.jsonl";
-        const LOCK: &str = "/tmp/.interspire-mcp-oci-locked-ledger.jsonl.lock";
+        const LEDGER: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-locked-ledger.jsonl";
+        const MANIFEST: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-locked-manifest.jsonl";
+        const LOCK: &str =
+            "/tmp/interspire-mcp-oci-private/.interspire-mcp-oci-locked-ledger.jsonl.lock";
+        prepare_private_fixture_parent(LEDGER);
         let _ = fs::remove_file(LEDGER);
         let _ = fs::remove_file(MANIFEST);
         let _ = fs::remove_file(LOCK);
-        fs::write(
+        write_private_fixture(
             MANIFEST,
             "{\"recipient_email\":\"person-one@example.invalid\",\"correlation_id\":\"trace-one\"}\n",
-        )
-        .expect("write manifest");
+        );
         fs::write(LOCK, "").expect("write lock");
         let ledger_config = OciSendLedgerConfig {
             path: Some(LEDGER.to_string()),
@@ -1811,15 +1931,17 @@ mod tests {
 
     #[test]
     fn prepare_apply_refuses_warning_plan_without_writing() {
-        const LEDGER: &str = "/tmp/interspire-mcp-oci-warning-plan-ledger.jsonl";
-        const MANIFEST: &str = "/tmp/interspire-mcp-oci-warning-plan-manifest.jsonl";
+        const LEDGER: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-warning-plan-ledger.jsonl";
+        const MANIFEST: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-warning-plan-manifest.jsonl";
+        prepare_private_fixture_parent(LEDGER);
         let _ = fs::remove_file(LEDGER);
         let _ = fs::remove_file(MANIFEST);
-        fs::write(
+        write_private_fixture(
             MANIFEST,
             "{\"recipient_email\":\"person-one@example.invalid\",\"correlation_id\":\"trace-one\"}\n",
-        )
-        .expect("write manifest");
+        );
         let ledger_config = OciSendLedgerConfig {
             path: Some(LEDGER.to_string()),
             required_for_sends: true,
@@ -1879,15 +2001,17 @@ mod tests {
 
     #[test]
     fn prepare_preview_rejects_malformed_manifest_hash_fields() {
-        const LEDGER: &str = "/tmp/interspire-mcp-oci-bad-hash-ledger.jsonl";
-        const MANIFEST: &str = "/tmp/interspire-mcp-oci-bad-hash-manifest.jsonl";
+        const LEDGER: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-bad-hash-ledger.jsonl";
+        const MANIFEST: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-bad-hash-manifest.jsonl";
+        prepare_private_fixture_parent(LEDGER);
         let _ = fs::remove_file(LEDGER);
         let _ = fs::remove_file(MANIFEST);
-        fs::write(
+        write_private_fixture(
             MANIFEST,
             "{\"recipient_hash\":\"person-one@example.invalid\",\"correlation_id\":\"trace-one\"}\n",
-        )
-        .expect("write manifest");
+        );
         let err = prepare_preview(
             &OciSendLedgerConfig {
                 path: Some(LEDGER.to_string()),
@@ -1914,22 +2038,24 @@ mod tests {
 
     #[test]
     fn prepare_preview_rejects_blank_raw_manifest_identifiers() {
-        const LEDGER: &str = "/tmp/interspire-mcp-oci-blank-raw-ledger.jsonl";
-        const BLANK_RECIPIENT: &str = "/tmp/interspire-mcp-oci-blank-recipient.jsonl";
-        const BLANK_TRACE: &str = "/tmp/interspire-mcp-oci-blank-trace.jsonl";
+        const LEDGER: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-blank-raw-ledger.jsonl";
+        const BLANK_RECIPIENT: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-blank-recipient.jsonl";
+        const BLANK_TRACE: &str =
+            "/tmp/interspire-mcp-oci-private/interspire-mcp-oci-blank-trace.jsonl";
+        prepare_private_fixture_parent(LEDGER);
         let _ = fs::remove_file(LEDGER);
         let _ = fs::remove_file(BLANK_RECIPIENT);
         let _ = fs::remove_file(BLANK_TRACE);
-        fs::write(
+        write_private_fixture(
             BLANK_RECIPIENT,
             "{\"recipient_email\":\"\",\"correlation_id\":\"trace-one\"}\n",
-        )
-        .expect("write blank recipient manifest");
-        fs::write(
+        );
+        write_private_fixture(
             BLANK_TRACE,
             "{\"recipient_email\":\"person-one@example.invalid\",\"message_id\":\"\"}\n",
-        )
-        .expect("write blank trace manifest");
+        );
 
         let request = |manifest_path: &Path| OciSendLedgerPreparePreviewRequest {
             campaign_id: "7".to_string(),
@@ -1964,8 +2090,31 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        PathBuf::from(format!(
-            "target/interspire-oci-ledger-tests/{label}-{unique}.jsonl"
-        ))
+        let path = PathBuf::from(format!(
+            "/tmp/interspire-mcp-oci-private/interspire-oci-ledger-tests-{label}-{unique}.jsonl"
+        ));
+        prepare_private_fixture_parent(path.to_str().expect("utf8 fixture path"));
+        path
+    }
+
+    fn prepare_private_fixture_parent(path: &str) {
+        let parent = Path::new(path).parent().expect("fixture parent");
+        fs::create_dir_all(parent).expect("create fixture parent");
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .expect("chmod fixture parent");
+    }
+
+    fn write_private_fixture(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
+        let path = path.as_ref();
+        prepare_private_fixture_parent(path.to_str().expect("utf8 fixture path"));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .expect("open private fixture");
+        file.write_all(contents.as_ref())
+            .expect("write private fixture");
     }
 }

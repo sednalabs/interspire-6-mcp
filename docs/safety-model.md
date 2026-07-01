@@ -267,6 +267,10 @@ guarded writes:
   trace values and reruns preflight. The prepare tools do not contact OCI and do
   not perform an Interspire send, schedule, queue, import, contact, list, or
   suppression mutation.
+- OCI ledger preparation and preflight reject non-private Unix permissions on
+  the ledger directory, manifest file, and existing ledger file because the
+  manifest can contain raw recipient or provider trace identifiers before the
+  tool hashes them.
 
 The wizard proof records Schedule and Stats rows before and after the Step2
 render. Output includes invariant evidence and explicit negative flags such as
