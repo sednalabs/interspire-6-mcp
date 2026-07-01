@@ -1347,6 +1347,7 @@ impl AdminHtmlClient {
         let mut final_response_summary = None;
         let mut popup_notes = Vec::new();
         let mut seen_popup_urls = HashSet::new();
+        let mut approved_cron_schedule = false;
         let mut next_popup_url = response
             .headers()
             .get(reqwest::header::LOCATION)
@@ -1367,6 +1368,39 @@ impl AdminHtmlClient {
                 ensure_authenticated_html(&html)?;
                 smtp_reason = transport_failure_reason(&html);
                 final_response_summary = step4_response_summary(&html);
+                // Cron-enabled Interspire sends stop at Step4 until the same
+                // session follows the exact Schedule approval continuation.
+                if let Some(approval_url) = guarded_schedule_approval_url(
+                    self.config.base_url.as_deref().unwrap_or_default(),
+                    &html,
+                )? {
+                    let approval_response = self
+                        .with_access_headers(self.http.get(approval_url))
+                        .send()
+                        .map_err(|err| InterspireError::Http(err.to_string()))?;
+                    if !approval_response.status().is_success()
+                        && !approval_response.status().is_redirection()
+                    {
+                        return Err(InterspireError::Http(format!(
+                            "guarded schedule approval route returned HTTP {}",
+                            approval_response.status().as_u16()
+                        )));
+                    }
+                    approved_cron_schedule = true;
+                    popup_notes.push(
+                        "Cron send confirmation approved through the guarded Schedule&A=1 route"
+                            .to_string(),
+                    );
+                    if approval_response.status().is_success() {
+                        let approval_html = approval_response
+                            .text()
+                            .map_err(|err| InterspireError::Http(err.to_string()))?;
+                        if !approval_html.trim().is_empty() {
+                            ensure_authenticated_html(&approval_html)?;
+                            job_id = job_id.or_else(|| schedule_job_id_from_html(&approval_html));
+                        }
+                    }
+                }
                 next_popup_url = next_popup_url.or(guarded_send_popup_url(
                     self.config.base_url.as_deref().unwrap_or_default(),
                     &html,
@@ -1463,7 +1497,7 @@ impl AdminHtmlClient {
                     .to_string(),
             );
             SendApplyStatus::Processed
-        } else if queued || popup_steps > 0 {
+        } else if queued || popup_steps > 0 || approved_cron_schedule {
             proof_gaps.push("Stats page did not yet show a completed send row".to_string());
             SendApplyStatus::Queued
         } else {
@@ -1482,6 +1516,12 @@ impl AdminHtmlClient {
         }
         if queued {
             popup_notes.push("Schedule rows changed after guarded send loop".to_string());
+        }
+        if approved_cron_schedule && job_id.is_none() {
+            proof_gaps.push(
+                "Cron schedule approval was followed but the approved job id was not extracted"
+                    .to_string(),
+            );
         }
         if job_id.is_none() && !stats_changed {
             if let Some(summary) = final_response_summary {
@@ -2557,6 +2597,40 @@ fn guarded_send_popup_url(base_url: &str, html: &str) -> Result<Option<Url>, Int
     Ok(None)
 }
 
+fn guarded_schedule_approval_url(
+    base_url: &str,
+    html: &str,
+) -> Result<Option<Url>, InterspireError> {
+    for candidate in schedule_approval_path_candidates(html) {
+        if let Ok(url) = safety::ensure_allowed_guarded_schedule_approval(base_url, &candidate) {
+            return Ok(Some(url));
+        }
+    }
+    Ok(None)
+}
+
+fn schedule_approval_path_candidates(html: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let lower = html.to_ascii_lowercase();
+    let needles = [
+        "index.php?page=schedule&a=1",
+        "index.php?page=schedule&amp;a=1",
+    ];
+    for needle in needles {
+        let mut offset = 0usize;
+        while let Some(relative) = lower[offset..].find(needle) {
+            let start = offset + relative;
+            let raw_tail = &html[start..];
+            let end = raw_tail
+                .find(|ch: char| matches!(ch, '"' | '\'' | '<' | '>' | ')') || ch.is_whitespace())
+                .unwrap_or(raw_tail.len());
+            candidates.push(raw_tail[..end].replace("&amp;", "&"));
+            offset = start + end.max(1);
+        }
+    }
+    candidates
+}
+
 fn send_popup_path_candidates(html: &str) -> Vec<String> {
     let mut candidates = Vec::new();
     let document = Html::parse_document(html);
@@ -2596,6 +2670,81 @@ fn send_popup_path_candidates(html: &str) -> Vec<String> {
     }
 
     candidates
+}
+
+fn schedule_job_id_from_html(html: &str) -> Option<u64> {
+    let mut ids = Vec::new();
+    let document = Html::parse_document(html);
+    if let Ok(input_selector) = Selector::parse("input") {
+        for input in document.select(&input_selector) {
+            if input
+                .value()
+                .attr("name")
+                .is_some_and(|name| name.eq_ignore_ascii_case("jobs[]"))
+            {
+                if let Some(id) = input
+                    .value()
+                    .attr("value")
+                    .and_then(|value| value.parse::<u64>().ok())
+                {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    if let Ok(link_selector) = Selector::parse("a") {
+        for link in document.select(&link_selector) {
+            if let Some(href) = link.value().attr("href") {
+                if let Some(id) = schedule_job_id_from_path(href) {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    for candidate in schedule_path_candidates(html) {
+        if let Some(id) = schedule_job_id_from_path(&candidate) {
+            ids.push(id);
+        }
+    }
+    ids.into_iter().max()
+}
+
+fn schedule_path_candidates(html: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let lower = html.to_ascii_lowercase();
+    let mut offset = 0usize;
+    while let Some(relative) = lower[offset..].find("index.php?page=schedule") {
+        let start = offset + relative;
+        let raw_tail = &html[start..];
+        let end = raw_tail
+            .find(|ch: char| matches!(ch, '"' | '\'' | '<' | '>' | ')' | ';') || ch.is_whitespace())
+            .unwrap_or(raw_tail.len());
+        candidates.push(raw_tail[..end].replace("&amp;", "&"));
+        offset = start + end.max(1);
+    }
+    candidates
+}
+
+fn schedule_job_id_from_path(path: &str) -> Option<u64> {
+    let base = Url::parse("https://example.test/admin/").ok()?;
+    let url = base.join(&path.replace("&amp;", "&")).ok()?;
+    let page = url
+        .query_pairs()
+        .find(|(key, _)| key.eq_ignore_ascii_case("Page"))
+        .map(|(_, value)| value.to_string())?;
+    if !page.eq_ignore_ascii_case("Schedule") {
+        return None;
+    }
+    for key in ["job", "Job", "jobid", "JobID"] {
+        if let Some(value) = url
+            .query_pairs()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+            .and_then(|(_, value)| value.as_ref().parse::<u64>().ok())
+        {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn send_popup_job_id(url: &Url) -> Option<u64> {
@@ -3241,13 +3390,14 @@ mod tests {
         append_csrf_pair_if_missing, campaign_body_audit_from_html, campaign_body_parts_from_html,
         campaign_body_step1_pairs, campaign_body_step2_action_path, campaign_test_send_digest,
         campaign_test_send_has_applyable_html, campaign_test_send_report, csrf_pair,
-        expected_public_subject_matches, guarded_send_final_form_post,
-        guarded_send_final_form_post_for_request, guarded_send_popup_url,
-        is_guarded_send_campaign_selection_name, list_ids_warning, optional_nonempty_sha256,
-        parse_send_wizard_final_page, preview_send_response_success, recipient_count_marker,
-        rows_changed_for_send_proof, rows_unchanged_for_send_proof, seed_send_apply_warnings,
-        selected_or_hidden_list_ids, send_step2_action_path, sha256_hex, step4_response_summary,
-        transport_failure_reason, validate_single_preview_email,
+        expected_public_subject_matches, guarded_schedule_approval_url,
+        guarded_send_final_form_post, guarded_send_final_form_post_for_request,
+        guarded_send_popup_url, is_guarded_send_campaign_selection_name, list_ids_warning,
+        optional_nonempty_sha256, parse_send_wizard_final_page, preview_send_response_success,
+        recipient_count_marker, rows_changed_for_send_proof, rows_unchanged_for_send_proof,
+        schedule_job_id_from_html, seed_send_apply_warnings, selected_or_hidden_list_ids,
+        send_step2_action_path, sha256_hex, step4_response_summary, transport_failure_reason,
+        validate_single_preview_email,
     };
     use crate::{
         redact,
@@ -3646,6 +3796,40 @@ mod tests {
         "#;
 
         assert!(guarded_send_final_form_post("https://example.test/admin/", html).is_err());
+    }
+
+    #[test]
+    fn guarded_schedule_approval_url_finds_cron_confirmation_button() {
+        let html = r#"
+            <input type="button" value="Approve Scheduled Send"
+              onclick="document.location='index.php?Page=Schedule&amp;A=1';">
+        "#;
+
+        let url = guarded_schedule_approval_url("https://example.test/admin/", html)
+            .expect("parse approval url")
+            .expect("approval url");
+
+        assert_eq!(
+            url.as_str(),
+            "https://example.test/admin/index.php?Page=Schedule&A=1"
+        );
+    }
+
+    #[test]
+    fn schedule_job_id_from_html_extracts_latest_schedule_job() {
+        let html = r#"
+            <tr>
+              <td><input type="checkbox" name="jobs[]" value="42"></td>
+              <td><a href="index.php?Page=Schedule&amp;Action=Approve&amp;job=42">Approve</a></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox" name="jobs[]" value="43"></td>
+              <td><a href="index.php?Page=Schedule&Action=Pause&job=43">Pause</a></td>
+            </tr>
+            <a href="index.php?Page=Newsletters&Action=View&id=99">View</a>
+        "#;
+
+        assert_eq!(schedule_job_id_from_html(html), Some(43));
     }
 
     #[test]
