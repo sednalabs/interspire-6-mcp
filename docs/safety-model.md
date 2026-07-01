@@ -260,9 +260,25 @@ guarded writes:
 - When `INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1`, both guarded send apply tools
   also require `oci_ledger_preflight` to match the expected campaign/batch row
   count in the configured private OCI send ledger before the final send form is
-  posted. The preflight `campaign_id` must equal the Interspire campaign id in
-  the send request. The ledger path is environment-configured only; tool callers
-  cannot supply arbitrary file paths.
+  posted. Matched rows must include recipient keys, trace keys, and valid UTC
+  `submitted_at`/timestamp values that are fresh enough for the immediate send
+  boundary. Rows older than 15 minutes, missing timestamps, invalid timestamps,
+  or timestamps more than 5 minutes in the future are ignored and counted in
+  `stale_rows_ignored`. The preflight `campaign_id` must equal the
+  Interspire campaign id in the send request. The ledger path is
+  environment-configured only; tool callers cannot supply arbitrary file paths.
+- `interspire_oci_send_ledger_prepare_preview` and
+  `interspire_oci_send_ledger_prepare_apply` can prepare that private ledger
+  from a private JSONL manifest. Preview computes sanitized rows and a plan id
+  without writing. Apply requires guarded writes, send controls, the exact plan
+  id, and `acknowledge_ledger_write=true`, then writes only hashed recipient and
+  trace values with an apply-time UTC `submitted_at` and reruns preflight. The
+  prepare tools do not contact OCI and do not perform an Interspire send,
+  schedule, queue, import, contact, list, or suppression mutation.
+- OCI ledger preparation and preflight reject non-private Unix permissions on
+  the ledger directory, manifest file, and existing ledger file because the
+  manifest can contain raw recipient or provider trace identifiers before the
+  tool hashes them.
 
 The wizard proof records Schedule and Stats rows before and after the Step2
 render. Output includes invariant evidence and explicit negative flags such as
@@ -275,11 +291,13 @@ not trigger cron. They post only the final Send-page form captured from the
 freshly proven wizard page, and only when the relevant runtime controls are
 enabled.
 
-OCI ledger preflight is not delivery proof. It proves only that a private local
-send ledger already contains the expected Interspire campaign/batch rows before
-the Interspire final send boundary. Provider acceptance, bounces, complaints,
-suppression reconciliation, and recipient rendering still require OCI and
-recipient-side readback after an explicitly approved send.
+OCI ledger preparation and preflight are not delivery proof. They prove only
+that a private local send ledger can contain, and does contain, the expected
+Interspire campaign/batch rows, timestamped when the ledger apply occurred and
+still fresh at the Interspire final send boundary.
+Provider acceptance, bounces, complaints, suppression reconciliation, and
+recipient rendering still require OCI and recipient-side readback after an
+explicitly approved send.
 
 Posting the final form is not considered proof of a send. Apply responses carry
 a post-send reconciliation object with the explicit status vocabulary
@@ -302,6 +320,14 @@ On Interspire 8.x, semantic `html_body` and `text_body` updates resolve against
 the editor controls exposed on the Step2 body form, such as
 `myDevEditControl_html`, instead of assuming those fields exist on the initial
 campaign metadata page.
+
+Some Interspire 8 editor shapes omit the plain-text editor control when the
+campaign is currently HTML-only. For a semantic `text_body` update, the adapter
+must render the body Step2 page through the allowlisted Step1 proof route with
+the Text+HTML format selected, then post the resulting Step2 `TextContent`
+control through the normal guarded Complete/Save boundary. Apply proof must
+re-read the campaign body and show non-zero text bytes before the campaign can
+be treated as multipart-ready.
 
 `interspire_campaign_render_artifact` is read-only against Interspire and writes
 private local artifacts outside the repository. Its output is artifact

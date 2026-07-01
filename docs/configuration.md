@@ -82,14 +82,20 @@ Current public behavior:
   non-secret settings, list-create, and campaign-copy apply.
 - `INTERSPIRE_SEND_CONTROLS=1` enables explicitly acknowledged one-recipient
   campaign preview/test sends through `interspire_campaign_test_send_apply`
-  and bounded seed sends through `interspire_seed_send_apply`.
+  and bounded seed sends through `interspire_seed_send_apply`. It also enables
+  `interspire_oci_send_ledger_prepare_apply`, which writes only a private local
+  ledger file and does not send.
 - `INTERSPIRE_PRODUCTION_SEND_CONTROLS=1` additionally enables
   `interspire_production_send_apply`, which requires exact expected recipient
   count, From, Reply-To, subject, HTML SHA-256, and confirmation phrase.
 - `INTERSPIRE_REQUIRE_OCI_SEND_LEDGER=1` makes both guarded send apply tools
   refuse before the final Interspire send form unless `oci_ledger_preflight`
   verifies the expected Interspire campaign/batch row count in the configured
-  private ledger. The preflight `campaign_id` must equal the Interspire
+  private ledger, with recipient keys, trace keys, and valid UTC
+  `submitted_at`/timestamp values on each matched row. Matched rows also must
+  be fresh: older than 15 minutes, invalid/missing timestamps, or timestamps
+  more than 5 minutes in the future are ignored and counted in
+  `stale_rows_ignored`. The preflight `campaign_id` must equal the Interspire
   `campaign_id` in the send request.
 - `INTERSPIRE_OCI_SEND_LEDGER_PATH` is the only ledger file path source. Send
   requests cannot provide a per-call file path.
@@ -99,6 +105,49 @@ Current public behavior:
 
 Use write flags only for the process that should apply an already-reviewed
 plan. Preview remains available without them.
+
+### OCI Send Ledger Preparation
+
+`interspire_oci_send_ledger_prepare_preview` and
+`interspire_oci_send_ledger_prepare_apply` are generic local-file helpers for
+operators who require a private OCI send ledger before a guarded Interspire send
+may proceed.
+
+The prepare tools:
+
+- read a private JSONL manifest supplied by `manifest_path`;
+- require the manifest to be a direct child of the configured ledger directory;
+- require the configured ledger path to come from
+  `INTERSPIRE_OCI_SEND_LEDGER_PATH`;
+- require the ledger directory, manifest file, and any existing ledger file to
+  be private on Unix, with no group/other permissions;
+- hash raw recipient, message, correlation, and header values before writing
+  ledger rows;
+- stamp appended rows with an apply-time UTC `submitted_at` value so monitoring
+  tools can bind the ledger evidence to an explicit send window;
+- return only hashes, counts, plan state, and preflight proof;
+- never contact OCI and never perform an Interspire send, schedule, queue,
+  import, contact, list, or suppression mutation.
+
+Each manifest line must be a JSON object with one recipient identifier or hash
+and one provider trace identifier or hash. Accepted recipient fields include
+`recipient_hash`, `recipient_id_hash`, `recipient_address_hash`,
+`recipient_email`, `recipient_id`, `subscriber_id`, `contact_id`, and `email`.
+Accepted trace fields include `message_id`, `provider_message_id`,
+`message_id_hash`, `correlation_id`, `correlation_id_hash`, `header_value`,
+and `header_value_hash`. Fields named `*_hash` must contain a 20- or
+64-character hexadecimal digest; put raw values in the non-hash fields so the
+prepare tool can hash them before writing.
+
+Preview computes a deterministic `plan_id`. Apply requires the same manifest,
+`expected_plan_id`, `acknowledge_ledger_write=true`,
+`INTERSPIRE_GUARDED_WRITES=1`, and `INTERSPIRE_SEND_CONTROLS=1`. Apply appends
+sanitized timestamped rows when the current ledger does not already contain the
+same fresh prepared rows. Old or timestampless matching rows are ignored for
+current-send proof and a new apply appends fresh timestamped rows instead of
+claiming idempotence. Partial fresh matching rows for the same campaign and
+batch still block so operators do not accidentally double-write a split ledger
+batch.
 
 ## Import Preflight
 
