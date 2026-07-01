@@ -18,7 +18,7 @@ before newsletter work goes wrong:
 - Which user-level SMTP overrides might affect a campaign owner?
 - Which audience exports are only private candidate artifacts, not send-ready
   proof?
-- If something dangerous is queued, can we preview a cancel/delete plan and
+- If something dangerous is queued, can we preview a cancel/delete/pause/resume plan and
   apply only that narrow plan with explicit write gates?
 - Can we stage a no-send campaign, list, user, or non-secret settings edit
   with preview/apply proof instead of clicking through the brittle admin UI?
@@ -36,7 +36,7 @@ before newsletter work goes wrong:
   approved field without turning normal readbacks into secret dumps?
 
 The server is read-only by default. Its write-class capabilities are limited to
-guarded queue cancel/delete, guarded campaign/list/user/settings/template
+guarded queue cancel/delete/pause/resume, guarded campaign/list/user/settings/template
 edits, guarded list creation, guarded campaign copy, private render artifacts,
 aggregate-only import preflight, private OCI send-ledger preparation, and
 separately gated seed or production send apply tools. All apply paths stay
@@ -107,8 +107,8 @@ than proprietary Interspire source snippets.
 | `interspire_admin_session_probe` | Read | Probe authenticated admin reachability through allowlisted read pages. |
 | `interspire_user_smtp_readback` | Read | Read redacted per-user SMTP override state. |
 | `interspire_queue_stats_readback` | Read | Read scheduled queue and stats rows without triggering cron. |
-| `interspire_queue_control_preview` | Read preview | Build plan IDs for cancel/delete actions found on the schedule page. |
-| `interspire_queue_control_apply` | Guarded apply | Apply one previously previewed queue cancel/delete plan when write gates are enabled. |
+| `interspire_queue_control_preview` | Read preview | Build plan IDs for cancel/delete/pause/resume actions found on the schedule page. |
+| `interspire_queue_control_apply` | Guarded apply | Apply one previously previewed queue cancel/delete/pause/resume plan when write gates are enabled. |
 | `interspire_campaign_readback` | Read | Read campaign manage rows with structured campaign ids/action flags, or one campaign edit-page summary. |
 | `interspire_campaign_body_audit` | Read | Audit redacted campaign body safety signals without returning raw HTML. |
 | `interspire_campaign_copy_preview` | Read preview | Preview a guarded copy plan for creating a draft from a known campaign. |
@@ -312,10 +312,15 @@ All write paths use the same safety pattern:
 
 ### Queue Controls
 
-Queue apply remains limited to Schedule-page cancel/delete actions.
+Queue apply remains limited to Schedule-page cancel/delete/pause/resume actions.
 
-The apply route is limited to Interspire Schedule-page cancel actions and the
-built-in Schedule delete form for one selected job.
+The apply route is limited to Interspire Schedule-page cancel, pause, and
+resume links plus the built-in Schedule delete form for one selected job.
+Plan ids bind the previewed action, numeric row/job identity, route
+fingerprint, and redacted row summary. Post-apply readback requires
+cancel/delete targets to disappear from allowlisted queue controls; pause and
+resume must remove the requested action and expose the expected opposite action
+for the same job.
 It does not use Interspire's queue controls to send, schedule, import, export,
 edit contacts, edit suppressions, change provider APIs, DNS, or secrets, or
 authorize any later send.

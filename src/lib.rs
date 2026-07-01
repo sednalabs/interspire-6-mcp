@@ -22,7 +22,7 @@
 //!   paths.
 //! * Allows one narrow, explicit audience-hygiene artifact export that writes
 //!   private local files and returns aggregate metadata only.
-//! * Allows queue cancel/delete plus guarded campaign/list/user/settings edits
+//! * Allows queue cancel/delete/pause/resume plus guarded campaign/list/user/settings edits
 //!   only through deterministic preview/apply plan ids and explicit runtime
 //!   write flags.
 //! * Allows a guarded seed-send apply tool only when send controls are
@@ -83,14 +83,14 @@ pub use response::{
     OciLedgerPreflightReport, OciLedgerPreflightRequest, OciSendLedgerPrepareApplyRequest,
     OciSendLedgerPreparePreviewRequest, OciSendLedgerPrepareReport, ProductionSendApplyReport,
     ProductionSendApplyRequest, QueueControlAction, QueueControlApplyReport,
-    QueueControlApplyRequest, QueueControlCandidate, QueueControlPreviewReport,
-    QueueControlPreviewRequest, QueueStatsReadbackReport, QueueStatsReadbackRequest,
-    RenderArtifact, SeedReadinessGate, SeedReadinessGateReport, SeedReadinessGateRequest,
-    SeedSendApplyReport, SeedSendApplyRequest, SendApplyStatus, SendReconciliationReport,
-    SendWizardReadbackReport, SendWizardReadbackRequest, SensitiveFieldDenial,
-    SensitiveFieldQueryReport, SensitiveFieldQueryRequest, SensitiveFieldTarget,
-    SensitiveFieldValue, SensitiveToolMetadata, SettingsAuditReport, SettingsAuditRequest,
-    SettingsInventoryReport, SettingsInventoryRequest, SettingsSectionName,
+    QueueControlApplyRequest, QueueControlApplyStatus, QueueControlCandidate,
+    QueueControlPreviewReport, QueueControlPreviewRequest, QueueStatsReadbackReport,
+    QueueStatsReadbackRequest, RenderArtifact, SeedReadinessGate, SeedReadinessGateReport,
+    SeedReadinessGateRequest, SeedSendApplyReport, SeedSendApplyRequest, SendApplyStatus,
+    SendReconciliationReport, SendWizardReadbackReport, SendWizardReadbackRequest,
+    SensitiveFieldDenial, SensitiveFieldQueryReport, SensitiveFieldQueryRequest,
+    SensitiveFieldTarget, SensitiveFieldValue, SensitiveToolMetadata, SettingsAuditReport,
+    SettingsAuditRequest, SettingsInventoryReport, SettingsInventoryRequest, SettingsSectionName,
     SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, StatusReport, StatusRequest,
     UserSmtpReadbackReport, UserSmtpReadbackRequest, UserUpdateApplyRequest,
     UserUpdatePreviewRequest, WarmupAudienceReadinessReport, WarmupAudienceReadinessRequest,
@@ -400,14 +400,14 @@ impl InterspireMcpServer {
                     .with_group("guarded-write")
                     .with_read_only(true)
                     .with_discovery(ToolDiscoveryMetadata::new(
-                        "Preview cancel/delete plan ids for Interspire scheduled queue rows.",
+                        "Preview cancel/delete/pause/resume plan ids for Interspire scheduled queue rows.",
                         ["interspire", "queue", "preview", "guarded-write"],
                     )),
                 ToolCapability::new("interspire_queue_control_apply")
                     .with_group("guarded-write")
                     .with_read_only(false)
                     .with_discovery(ToolDiscoveryMetadata::new(
-                        "Apply a previously previewed Interspire scheduled queue cancel/delete plan.",
+                        "Apply a previously previewed Interspire scheduled queue cancel/delete/pause/resume plan.",
                         ["interspire", "queue", "apply", "guarded-write"],
                     )),
                 ToolCapability::new("interspire_campaign_readback")
@@ -1014,7 +1014,7 @@ impl InterspireMcpServer {
     }
 
     #[tool(
-        description = "Preview cancel/delete plan ids for Interspire scheduled queue rows. Preview is read-only."
+        description = "Preview cancel/delete/pause/resume plan ids for Interspire scheduled queue rows. Preview is read-only."
     )]
     fn interspire_queue_control_preview(
         &self,
@@ -1024,7 +1024,7 @@ impl InterspireMcpServer {
     }
 
     #[tool(
-        description = "Apply a previously previewed Interspire scheduled queue cancel/delete plan. Requires guarded write environment flags."
+        description = "Apply a previously previewed Interspire scheduled queue cancel/delete/pause/resume plan. Requires guarded write environment flags."
     )]
     fn interspire_queue_control_apply(
         &self,
@@ -1366,7 +1366,7 @@ impl InterspireMcpServer {
 impl ServerHandler for InterspireMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions("Safe Interspire Email Marketer evidence tools. Mutations are disabled by default and limited to guarded queue cancel/delete, campaign/list/user/settings/template apply plans, private render artifacts, and separately gated seed or production send apply tools.")
+            .with_instructions("Safe Interspire Email Marketer evidence tools. Mutations are disabled by default and limited to guarded queue cancel/delete/pause/resume, campaign/list/user/settings/template apply plans, private render artifacts, and separately gated seed or production send apply tools.")
     }
 
     fn list_tools(

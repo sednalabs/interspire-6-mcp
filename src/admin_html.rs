@@ -68,6 +68,8 @@ pub struct QueueControlApplyEvidence {
     pub before_row_summary: Option<String>,
     pub after_candidate_count: usize,
     pub after_row_still_present: bool,
+    pub after_matching_action_still_available: bool,
+    pub after_target_actions: Vec<QueueControlAction>,
     pub notes: Vec<String>,
 }
 
@@ -723,13 +725,27 @@ impl AdminHtmlClient {
 
         let after = self.load_queue_control_links(max_rows)?;
         let before_row_summary = Some(selected.candidate.row_summary.clone());
-        let after_row_still_present = after
+        let after_matching_action_still_available = after
             .iter()
-            .any(|candidate| same_queue_control_target(&selected.route, &candidate.route));
-        if after_row_still_present {
+            .any(|candidate| same_queue_control_action(&selected.route, &candidate.route));
+        let after_target_actions = queue_control_target_actions(&selected.route, &after);
+        let apply_proven = queue_control_apply_is_proven(
+            selected.candidate.action,
+            after_matching_action_still_available,
+            &after_target_actions,
+        );
+        if !apply_proven {
+            let actions = after_target_actions
+                .iter()
+                .map(|action| action.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
             return Err(InterspireError::Safety(
-                "queue control route returned but the same queue target still appears on the Schedule page; treat apply as unconfirmed"
-                    .to_string(),
+                format!(
+                    "queue control route returned but Schedule readback did not prove the requested {} action; after target actions: [{}]",
+                    selected.candidate.action.as_str(),
+                    actions
+                ),
             ));
         }
 
@@ -742,13 +758,16 @@ impl AdminHtmlClient {
                 "admin returned HTTP {}; Schedule page re-read after apply",
                 status.as_u16()
             ),
+            queue_control_apply_proof_note(selected.candidate.action, &after_target_actions),
         ]);
 
         Ok(QueueControlApplyEvidence {
             before_candidate_count,
             before_row_summary,
             after_candidate_count: after.len(),
-            after_row_still_present,
+            after_row_still_present: !after_target_actions.is_empty(),
+            after_matching_action_still_available,
+            after_target_actions,
             notes,
         })
     }
@@ -2215,7 +2234,7 @@ fn parse_confirm_delete_job(href: &str) -> Option<u64> {
 
 fn looks_like_queue_control_label(label: &str) -> bool {
     let label = label.to_ascii_lowercase();
-    ["cancel", "delete", "remove", "abort"]
+    ["cancel", "delete", "remove", "abort", "pause", "resume"]
         .iter()
         .any(|needle| label.contains(needle))
 }
@@ -2264,12 +2283,80 @@ fn admin_origin(base_url: &str) -> Result<String, InterspireError> {
     Ok(origin)
 }
 
-fn same_queue_control_target(left: &QueueControlRoute, right: &QueueControlRoute) -> bool {
+fn same_queue_control_action(left: &QueueControlRoute, right: &QueueControlRoute) -> bool {
     left.action == right.action
         && left
             .identifier_key
             .eq_ignore_ascii_case(&right.identifier_key)
         && left.identifier_value == right.identifier_value
+}
+
+fn same_queue_control_target(left: &QueueControlRoute, right: &QueueControlRoute) -> bool {
+    queue_control_identifier_family(&left.identifier_key)
+        == queue_control_identifier_family(&right.identifier_key)
+        && left.identifier_value == right.identifier_value
+}
+
+fn queue_control_identifier_family(key: &str) -> &'static str {
+    match key.to_ascii_lowercase().as_str() {
+        "id" | "job" | "jobs[]" | "jobid" | "queueid" => "queue",
+        "sendid" | "newsletterid" | "campaignid" => "campaign",
+        _ => "other",
+    }
+}
+
+fn queue_control_target_actions(
+    selected: &QueueControlRoute,
+    candidates: &[QueueControlLink],
+) -> Vec<QueueControlAction> {
+    let mut actions = Vec::new();
+    for candidate in candidates {
+        if same_queue_control_target(selected, &candidate.route)
+            && !actions.contains(&candidate.candidate.action)
+        {
+            actions.push(candidate.candidate.action);
+        }
+    }
+    actions
+}
+
+fn queue_control_apply_is_proven(
+    action: QueueControlAction,
+    after_matching_action_still_available: bool,
+    after_target_actions: &[QueueControlAction],
+) -> bool {
+    if after_matching_action_still_available {
+        return false;
+    }
+    match action {
+        QueueControlAction::Cancel | QueueControlAction::Delete => after_target_actions.is_empty(),
+        QueueControlAction::Pause => after_target_actions.contains(&QueueControlAction::Resume),
+        QueueControlAction::Resume => after_target_actions.contains(&QueueControlAction::Pause),
+    }
+}
+
+fn queue_control_apply_proof_note(
+    action: QueueControlAction,
+    after_target_actions: &[QueueControlAction],
+) -> String {
+    match action {
+        QueueControlAction::Cancel | QueueControlAction::Delete => {
+            "Schedule readback no longer shows any allowlisted controls for the same queue target"
+                .to_string()
+        }
+        QueueControlAction::Pause | QueueControlAction::Resume => {
+            let actions = after_target_actions
+                .iter()
+                .map(|action| action.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "Schedule readback no longer shows the requested {} action and now shows target actions [{}]",
+                action.as_str(),
+                actions
+            )
+        }
+    }
 }
 
 pub fn parse_campaign_fields(html: &str) -> Result<Vec<RedactedField>, InterspireError> {
@@ -3976,6 +4063,48 @@ mod tests {
     }
 
     #[test]
+    fn queue_control_links_include_pause_and_resume_as_guarded_plans() {
+        let html = r#"
+            <table>
+              <tr>
+                <th>Campaign</th><th>Actions</th>
+              </tr>
+              <tr>
+                <td><input type="checkbox" name="jobs[]" value="7"></td>
+                <td>Newsletter to person@example.com</td>
+                <td>
+                  <a href="index.php?Page=Schedule&Action=Pause&job=7&csrfToken=abc">Pause</a>
+                  <a href="index.php?Page=Schedule&Action=Resume&job=7&csrfToken=abc">Resume</a>
+                </td>
+              </tr>
+            </table>
+        "#;
+
+        let links = parse_queue_control_links("https://example.test/admin/", html, 25)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert_eq!(links.len(), 2);
+        let pause = links
+            .iter()
+            .find(|link| link.candidate.action == QueueControlAction::Pause)
+            .unwrap_or_else(|| panic!("pause candidate should be present"));
+        let resume = links
+            .iter()
+            .find(|link| link.candidate.action == QueueControlAction::Resume)
+            .unwrap_or_else(|| panic!("resume candidate should be present"));
+        assert_ne!(pause.candidate.plan_id, resume.candidate.plan_id);
+        assert_eq!(pause.route.identifier_value, 7);
+        assert_eq!(resume.route.identifier_value, 7);
+        for link in links {
+            let candidate_json =
+                serde_json::to_string(&link.candidate).unwrap_or_else(|err| panic!("{err}"));
+            assert!(!candidate_json.contains("index.php"));
+            assert!(!candidate_json.contains("csrfToken"));
+            assert!(!candidate_json.contains("person@example.com"));
+        }
+    }
+
+    #[test]
     fn queue_control_preview_ignores_nested_container_rows() {
         let html = r#"
             <table>
@@ -4040,7 +4169,12 @@ mod tests {
         let links = parse_queue_control_links("https://example.test/admin/", html, 25)
             .unwrap_or_else(|err| panic!("{err}"));
 
-        assert_eq!(links.len(), 1);
+        assert_eq!(links.len(), 2);
+        let resume = links
+            .iter()
+            .find(|link| link.candidate.action == QueueControlAction::Resume)
+            .unwrap_or_else(|| panic!("resume candidate should be present"));
+        assert_eq!(resume.route.identifier_value, 182744);
         let delete = links
             .iter()
             .find(|link| link.candidate.action == QueueControlAction::Delete)
@@ -4117,6 +4251,40 @@ mod tests {
             })
             .unwrap_or_else(|| panic!("second delete candidate should be present"));
         assert!(mismatched.pause_before_delete.is_none());
+    }
+
+    #[test]
+    fn queue_control_apply_proof_is_action_specific() {
+        assert!(queue_control_apply_is_proven(
+            QueueControlAction::Cancel,
+            false,
+            &[]
+        ));
+        assert!(!queue_control_apply_is_proven(
+            QueueControlAction::Delete,
+            false,
+            &[QueueControlAction::Resume]
+        ));
+        assert!(queue_control_apply_is_proven(
+            QueueControlAction::Pause,
+            false,
+            &[QueueControlAction::Resume, QueueControlAction::Delete]
+        ));
+        assert!(queue_control_apply_is_proven(
+            QueueControlAction::Resume,
+            false,
+            &[QueueControlAction::Pause, QueueControlAction::Delete]
+        ));
+        assert!(!queue_control_apply_is_proven(
+            QueueControlAction::Pause,
+            false,
+            &[QueueControlAction::Delete]
+        ));
+        assert!(!queue_control_apply_is_proven(
+            QueueControlAction::Resume,
+            true,
+            &[QueueControlAction::Pause]
+        ));
     }
 
     #[test]

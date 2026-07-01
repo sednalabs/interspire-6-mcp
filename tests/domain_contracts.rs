@@ -759,8 +759,14 @@ fn queue_control_apply_contract_does_not_mutate_lists_or_authorize_send() {
         .unwrap_or_else(|err| panic!("{err}"));
 
     assert!(report.applied);
+    assert_eq!(
+        report.status,
+        interspire_mcp::QueueControlApplyStatus::AppliedProven
+    );
     assert!(!report.legacy_lists_mutated);
     assert!(!report.production_send_authorized);
+    assert!(!report.after_matching_action_still_available);
+    assert!(report.after_target_actions.is_empty());
     assert!(!report.after_row_still_present);
 }
 

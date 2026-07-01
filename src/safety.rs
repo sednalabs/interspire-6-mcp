@@ -3,8 +3,8 @@
 //! Only explicitly known GET pages are admitted. Unreviewed send, schedule,
 //! cron, import, export, save, delete, unsubscribe, and parameter-smuggling
 //! variants are blocked before the HTTP client can request them. Mutating
-//! exceptions are narrow guarded routes: Schedule-page cancel/delete and the
-//! explicitly enabled guarded-send final form post.
+//! exceptions are narrow guarded routes: Schedule-page cancel/delete/pause/resume
+//! and the explicitly enabled guarded-send final form post.
 
 use crate::{error::InterspireError, response::QueueControlAction};
 use std::collections::HashSet;
@@ -775,7 +775,7 @@ pub fn classify_allowed_queue_control(url: &Url) -> Result<QueueControlRoute, In
         .and_then(classify_queue_control_action)
         .ok_or_else(|| {
             InterspireError::Safety(format!(
-                "queue control action is not in the cancel/delete allowlist: {action_raw:?}"
+                "queue control action is not in the cancel/delete/pause/resume allowlist: {action_raw:?}"
             ))
         })?;
 
@@ -1154,7 +1154,7 @@ fn ensure_only_queue_control_query_keys(
     }
 
     Err(InterspireError::Safety(
-        "queue control route includes query parameters outside the cancel/delete allowlist"
+        "queue control route includes query parameters outside the cancel/delete/pause/resume allowlist"
             .to_string(),
     ))
 }
@@ -1197,6 +1197,8 @@ fn classify_queue_control_action(raw: &str) -> Option<QueueControlAction> {
     match raw.to_ascii_lowercase().as_str() {
         "cancel" | "canceljob" | "abort" | "abortjob" => Some(QueueControlAction::Cancel),
         "delete" | "deletejob" | "remove" | "removejob" => Some(QueueControlAction::Delete),
+        "pause" | "pausejob" => Some(QueueControlAction::Pause),
+        "resume" | "resumejob" => Some(QueueControlAction::Resume),
         _ => None,
     }
 }
@@ -1537,7 +1539,7 @@ mod tests {
     }
 
     #[test]
-    fn allows_only_cancel_delete_schedule_queue_controls() {
+    fn allows_only_schedule_queue_controls() {
         let cancel =
             classify_allowed_queue_control(&url("index.php?Page=Schedule&Action=Cancel&id=42"))
                 .unwrap_or_else(|err| panic!("{err}"));
@@ -1550,6 +1552,20 @@ mod tests {
         .unwrap_or_else(|err| panic!("{err}"));
         assert_eq!(delete.action, QueueControlAction::Delete);
         assert_eq!(delete.identifier_value, 99);
+
+        let pause = classify_allowed_queue_control(&url(
+            "index.php?Page=Schedule&Action=Pause&job=77&csrfToken=abc",
+        ))
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(pause.action, QueueControlAction::Pause);
+        assert_eq!(pause.identifier_value, 77);
+
+        let resume = classify_allowed_queue_control(&url(
+            "index.php?Page=Schedule&Action=ResumeJob&jobid=88&csrfToken=abc",
+        ))
+        .unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(resume.action, QueueControlAction::Resume);
+        assert_eq!(resume.identifier_value, 88);
     }
 
     #[test]
@@ -1862,6 +1878,8 @@ mod tests {
             "index.php?Page=Schedule&Action=Cancel",
             "index.php?Page=Schedule&Action=Cancel&id=abc",
             "index.php?Page=Schedule&Action=Delete&id=42&sendid=99",
+            "index.php?Page=Schedule&Action=Pause&job=42&sendid=99",
+            "index.php?Page=Schedule&Action=Resume&job=42&Next=Send",
             "index.php?Page=Schedule&Action=Cancel&id=1&Next=Send",
             "index.php?Page=Newsletters&Action=Delete&id=1",
             "index.php?Page=Subscribers&Action=Delete&id=1",

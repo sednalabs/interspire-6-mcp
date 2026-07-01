@@ -7,8 +7,9 @@ use crate::{
         CampaignUpdateApplyRequest, CampaignUpdatePreviewRequest, Evidence,
         GuardedWriteApplyReport, GuardedWritePreviewReport, ListUpdateApplyRequest,
         ListUpdatePreviewRequest, QueueControlApplyReport, QueueControlApplyRequest,
-        QueueControlPreviewReport, QueueControlPreviewRequest, SettingsUpdateApplyRequest,
-        SettingsUpdatePreviewRequest, UserUpdateApplyRequest, UserUpdatePreviewRequest,
+        QueueControlApplyStatus, QueueControlPreviewReport, QueueControlPreviewRequest,
+        SettingsUpdateApplyRequest, SettingsUpdatePreviewRequest, UserUpdateApplyRequest,
+        UserUpdatePreviewRequest,
     },
 };
 
@@ -48,7 +49,7 @@ impl LiveInterspireBackend {
             production_send_authorized: false,
             warnings: vec![
                 "preview only; apply requires INTERSPIRE_GUARDED_WRITES=1 and INTERSPIRE_QUEUE_WRITE_CONTROLS=1".to_string(),
-                "queue controls can cancel/delete scheduled rows only; they do not send, schedule, import, export, or mutate contacts".to_string(),
+                "queue controls can cancel/delete/pause/resume scheduled rows only; they do not send, schedule, import, export, or mutate contacts".to_string(),
             ],
             evidence: Evidence {
                 source: "interspire_admin_html".to_string(),
@@ -69,6 +70,7 @@ impl LiveInterspireBackend {
                 configured: false,
                 guarded_writes_enabled: self.config.guarded_writes.enabled,
                 queue_controls_enabled: self.config.guarded_writes.queue_controls_enabled,
+                status: QueueControlApplyStatus::Blocked,
                 applied: false,
                 plan_id: Some(request.plan_id.clone()),
                 action: request.action,
@@ -76,6 +78,8 @@ impl LiveInterspireBackend {
                 before_row_summary: None,
                 after_candidate_count: 0,
                 after_row_still_present: false,
+                after_matching_action_still_available: false,
+                after_target_actions: Vec::new(),
                 legacy_lists_mutated: false,
                 production_send_authorized: false,
                 warnings: vec![
@@ -95,6 +99,7 @@ impl LiveInterspireBackend {
             configured: true,
             guarded_writes_enabled: self.config.guarded_writes.enabled,
             queue_controls_enabled: self.config.guarded_writes.queue_controls_enabled,
+            status: QueueControlApplyStatus::AppliedProven,
             applied: true,
             plan_id: Some(request.plan_id.clone()),
             action: request.action,
@@ -102,6 +107,8 @@ impl LiveInterspireBackend {
             before_row_summary: evidence.before_row_summary,
             after_candidate_count: evidence.after_candidate_count,
             after_row_still_present: evidence.after_row_still_present,
+            after_matching_action_still_available: evidence.after_matching_action_still_available,
+            after_target_actions: evidence.after_target_actions,
             legacy_lists_mutated: false,
             production_send_authorized: false,
             warnings: vec![
