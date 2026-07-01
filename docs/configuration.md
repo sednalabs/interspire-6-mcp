@@ -91,8 +91,11 @@ Current public behavior:
   refuse before the final Interspire send form unless `oci_ledger_preflight`
   verifies the expected Interspire campaign/batch row count in the configured
   private ledger, with recipient keys, trace keys, and valid UTC
-  `submitted_at`/timestamp values on each matched row. The preflight
-  `campaign_id` must equal the Interspire `campaign_id` in the send request.
+  `submitted_at`/timestamp values on each matched row. Matched rows also must
+  be fresh: older than 15 minutes, invalid/missing timestamps, or timestamps
+  more than 5 minutes in the future are ignored and counted in
+  `stale_rows_ignored`. The preflight `campaign_id` must equal the Interspire
+  `campaign_id` in the send request.
 - `INTERSPIRE_OCI_SEND_LEDGER_PATH` is the only ledger file path source. Send
   requests cannot provide a per-call file path.
 - `INTERSPIRE_CONTACT_WRITE_CONTROLS` is reserved for later phases and should
@@ -138,10 +141,12 @@ prepare tool can hash them before writing.
 Preview computes a deterministic `plan_id`. Apply requires the same manifest,
 `expected_plan_id`, `acknowledge_ledger_write=true`,
 `INTERSPIRE_GUARDED_WRITES=1`, and `INTERSPIRE_SEND_CONTROLS=1`. Apply appends
-sanitized timestamped rows only when the current ledger does not already verify
-and does not contain partial matching rows for the same campaign and batch. Old
-matching rows without a valid UTC `submitted_at`/timestamp are treated as
-unverified and must be quarantined or regenerated before send readiness.
+sanitized timestamped rows when the current ledger does not already contain the
+same fresh prepared rows. Old or timestampless matching rows are ignored for
+current-send proof and a new apply appends fresh timestamped rows instead of
+claiming idempotence. Partial fresh matching rows for the same campaign and
+batch still block so operators do not accidentally double-write a split ledger
+batch.
 
 ## Import Preflight
 
