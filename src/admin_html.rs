@@ -41,6 +41,13 @@ use std::{
 };
 use url::Url;
 
+const ADMIN_LOGIN_PAGE_ERROR: &str =
+    "admin read returned login page; authentication was not established";
+const ADMIN_LOGIN_REJECTED_ERROR: &str =
+    "admin login returned the login page; credentials or session were not accepted";
+const ADMIN_LOGIN_RETRY_ATTEMPTS: usize = 3;
+const ADMIN_LOGIN_RETRY_DELAY: Duration = Duration::from_millis(150);
+
 #[derive(Debug, Clone)]
 pub struct AdminHtmlClient {
     config: AdminHtmlConfig,
@@ -1038,10 +1045,27 @@ impl AdminHtmlClient {
     }
 
     fn login(&self) -> Result<(), InterspireError> {
-        if self.get_allowed(&AdminReadPage::Lists.path()).is_ok() {
+        if self.get_allowed_once(&AdminReadPage::Lists.path()).is_ok() {
             return Ok(());
         }
 
+        let mut last_auth_loss = None;
+        for attempt in 0..ADMIN_LOGIN_RETRY_ATTEMPTS {
+            match self.login_once() {
+                Ok(()) => return Ok(()),
+                Err(err) if admin_auth_lost(&err) && attempt + 1 < ADMIN_LOGIN_RETRY_ATTEMPTS => {
+                    last_auth_loss = Some(err);
+                    std::thread::sleep(ADMIN_LOGIN_RETRY_DELAY);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(last_auth_loss
+            .unwrap_or_else(|| InterspireError::Http(ADMIN_LOGIN_PAGE_ERROR.to_string())))
+    }
+
+    fn login_once(&self) -> Result<(), InterspireError> {
         let base_url = self.config.base_url.as_deref().unwrap_or_default();
         let username = self.config.username.as_deref().unwrap_or_default();
         let password = self.config.password.as_deref().unwrap_or_default();
@@ -1072,7 +1096,23 @@ impl AdminHtmlClient {
                 response.status().as_u16()
             )));
         }
-        self.get_allowed(&AdminReadPage::Lists.path()).map(|_| ())
+        if response.status().is_redirection() && redirects_to_login(&response)? {
+            return Err(InterspireError::Http(
+                ADMIN_LOGIN_REJECTED_ERROR.to_string(),
+            ));
+        }
+        if response.status().is_success() {
+            let html = response
+                .text()
+                .map_err(|err| InterspireError::Http(err.to_string()))?;
+            if contains_login_form(&html)? {
+                return Err(InterspireError::Http(
+                    ADMIN_LOGIN_REJECTED_ERROR.to_string(),
+                ));
+            }
+        }
+        self.get_allowed_once(&AdminReadPage::Lists.path())
+            .map(|_| ())
     }
 
     fn login_csrf_token(&self, login_url: &Url) -> Result<Option<LoginCsrfToken>, InterspireError> {
@@ -1110,6 +1150,17 @@ impl AdminHtmlClient {
     }
 
     pub(super) fn get_allowed(&self, path: &str) -> Result<String, InterspireError> {
+        match self.get_allowed_once(path) {
+            Ok(html) => Ok(html),
+            Err(err) if admin_auth_lost(&err) => {
+                self.login()?;
+                self.get_allowed_once(path)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn get_allowed_once(&self, path: &str) -> Result<String, InterspireError> {
         let base_url = self.config.base_url.as_deref().unwrap_or_default();
         let url = safety::ensure_allowed_admin_get(base_url, path)?;
         let response = self
@@ -1185,6 +1236,14 @@ fn looks_like_save_submit(control: &forms::FormControl) -> bool {
 }
 
 pub(super) fn ensure_authenticated_html(html: &str) -> Result<(), InterspireError> {
+    if contains_login_form(html)? {
+        return Err(InterspireError::Http(ADMIN_LOGIN_PAGE_ERROR.to_string()));
+    }
+
+    Ok(())
+}
+
+fn contains_login_form(html: &str) -> Result<bool, InterspireError> {
     let document = Html::parse_document(html);
     let input_selector =
         Selector::parse("input").map_err(|err| InterspireError::HtmlParse(err.to_string()))?;
@@ -1210,13 +1269,22 @@ pub(super) fn ensure_authenticated_html(html: &str) -> Result<(), InterspireErro
         })
     });
 
-    if saw_username || saw_password || saw_login_action {
-        return Err(InterspireError::Http(
-            "admin read returned login page; authentication was not established".to_string(),
-        ));
-    }
+    Ok(saw_username || saw_password || saw_login_action)
+}
 
-    Ok(())
+fn admin_auth_lost(err: &InterspireError) -> bool {
+    matches!(err, InterspireError::Http(message) if message == ADMIN_LOGIN_PAGE_ERROR)
+}
+
+fn redirects_to_login(response: &reqwest::blocking::Response) -> Result<bool, InterspireError> {
+    let Some(location) = response.headers().get(reqwest::header::LOCATION) else {
+        return Ok(false);
+    };
+    let location = location
+        .to_str()
+        .map_err(|err| InterspireError::Http(err.to_string()))?
+        .to_ascii_lowercase();
+    Ok(location.contains("page=login") || location.contains("action=login"))
 }
 
 pub(super) fn extract_login_csrf_token(html: &str) -> Option<LoginCsrfToken> {
@@ -3395,6 +3463,119 @@ mod tests {
         assert!(err.to_string().contains("login page"));
     }
 
+    #[test]
+    fn list_summary_retries_when_login_session_is_lost_after_post() {
+        let server = spawn_auth_loss_retry_fixture_server();
+        let client = AdminHtmlClient::new(test_admin_config(&server.base_url))
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let report = client
+            .list_summary_readback(0)
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(report.ok);
+        let requests = server.requests();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| {
+                    request.starts_with("POST /admin/index.php?Page=Login&Action=Login ")
+                })
+                .count(),
+            2
+        );
+        assert!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("GET /admin/index.php?Page=Lists "))
+                .count()
+                >= 4
+        );
+    }
+
+    #[test]
+    fn get_allowed_reauthenticates_when_session_expires_after_login() {
+        let server = spawn_read_reauth_fixture_server();
+        let client = AdminHtmlClient::new(test_admin_config(&server.base_url))
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        client.login().unwrap_or_else(|err| panic!("{err}"));
+        let html = client
+            .get_allowed(&AdminReadPage::Settings { tab: 2 }.path())
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        assert!(html.contains("smtp.example.test"));
+        let requests = server.requests();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| {
+                    request.starts_with("POST /admin/index.php?Page=Login&Action=Login ")
+                })
+                .count(),
+            2
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("GET /admin/index.php?Page=Settings&Tab=2 "))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn login_post_returning_login_form_is_not_retried() {
+        let server = spawn_rejected_login_fixture_server();
+        let client = AdminHtmlClient::new(test_admin_config(&server.base_url))
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let err = client
+            .list_summary_readback(0)
+            .expect_err("login rejection should fail");
+
+        assert!(matches!(
+            err,
+            InterspireError::Http(message) if message == ADMIN_LOGIN_REJECTED_ERROR
+        ));
+        let requests = server.requests();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| {
+                    request.starts_with("POST /admin/index.php?Page=Login&Action=Login ")
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn login_post_redirecting_to_login_is_not_retried() {
+        let server = spawn_rejected_login_redirect_fixture_server();
+        let client = AdminHtmlClient::new(test_admin_config(&server.base_url))
+            .unwrap_or_else(|err| panic!("{err}"));
+
+        let err = client
+            .list_summary_readback(0)
+            .expect_err("login rejection should fail");
+
+        assert!(matches!(
+            err,
+            InterspireError::Http(message) if message == ADMIN_LOGIN_REJECTED_ERROR
+        ));
+        let requests = server.requests();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| {
+                    request.starts_with("POST /admin/index.php?Page=Login&Action=Login ")
+                })
+                .count(),
+            1
+        );
+    }
+
     struct TestAdminServer {
         base_url: String,
         requests: Arc<Mutex<Vec<String>>>,
@@ -3441,6 +3622,253 @@ mod tests {
             },
             fields: fields.iter().map(|field| (*field).to_string()).collect(),
             acknowledge_sensitive_output,
+        }
+    }
+
+    fn spawn_auth_loss_retry_fixture_server() -> TestAdminServer {
+        let listener =
+            TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| panic!("bind failed: {err}"));
+        listener
+            .set_nonblocking(true)
+            .unwrap_or_else(|err| panic!("set_nonblocking failed: {err}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|err| panic!("local_addr failed: {err}"));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let thread_requests = Arc::clone(&requests);
+        let list_reads = Arc::new(Mutex::new(0_usize));
+        let thread_list_reads = Arc::clone(&list_reads);
+
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_millis(250)))
+                            .unwrap_or_else(|err| panic!("set_read_timeout failed: {err}"));
+                        let mut buffer = [0_u8; 8192];
+                        let bytes = stream
+                            .read(&mut buffer)
+                            .unwrap_or_else(|err| panic!("test request read failed: {err}"));
+                        let request = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+                        thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while push: {err}")
+                            })
+                            .push(request.clone());
+                        write_auth_loss_retry_fixture_response(
+                            &mut stream,
+                            &request,
+                            &thread_list_reads,
+                        );
+                        if thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while count: {err}")
+                            })
+                            .len()
+                            >= 8
+                        {
+                            break;
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("test server accept failed: {err}"),
+                }
+            }
+        });
+
+        TestAdminServer {
+            base_url: format!("http://{address}/admin/"),
+            requests,
+            handle: Some(handle),
+        }
+    }
+
+    fn spawn_read_reauth_fixture_server() -> TestAdminServer {
+        let listener =
+            TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| panic!("bind failed: {err}"));
+        listener
+            .set_nonblocking(true)
+            .unwrap_or_else(|err| panic!("set_nonblocking failed: {err}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|err| panic!("local_addr failed: {err}"));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let thread_requests = Arc::clone(&requests);
+        let list_reads = Arc::new(Mutex::new(0_usize));
+        let settings_reads = Arc::new(Mutex::new(0_usize));
+        let thread_list_reads = Arc::clone(&list_reads);
+        let thread_settings_reads = Arc::clone(&settings_reads);
+
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_millis(250)))
+                            .unwrap_or_else(|err| panic!("set_read_timeout failed: {err}"));
+                        let mut buffer = [0_u8; 8192];
+                        let bytes = stream
+                            .read(&mut buffer)
+                            .unwrap_or_else(|err| panic!("test request read failed: {err}"));
+                        let request = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+                        thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while push: {err}")
+                            })
+                            .push(request.clone());
+                        write_read_reauth_fixture_response(
+                            &mut stream,
+                            &request,
+                            &thread_list_reads,
+                            &thread_settings_reads,
+                        );
+                        if thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while count: {err}")
+                            })
+                            .len()
+                            >= 10
+                        {
+                            break;
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("test server accept failed: {err}"),
+                }
+            }
+        });
+
+        TestAdminServer {
+            base_url: format!("http://{address}/admin/"),
+            requests,
+            handle: Some(handle),
+        }
+    }
+
+    fn spawn_rejected_login_fixture_server() -> TestAdminServer {
+        let listener =
+            TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| panic!("bind failed: {err}"));
+        listener
+            .set_nonblocking(true)
+            .unwrap_or_else(|err| panic!("set_nonblocking failed: {err}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|err| panic!("local_addr failed: {err}"));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let thread_requests = Arc::clone(&requests);
+
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_millis(250)))
+                            .unwrap_or_else(|err| panic!("set_read_timeout failed: {err}"));
+                        let mut buffer = [0_u8; 8192];
+                        let bytes = stream
+                            .read(&mut buffer)
+                            .unwrap_or_else(|err| panic!("test request read failed: {err}"));
+                        let request = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+                        thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while push: {err}")
+                            })
+                            .push(request.clone());
+                        write_rejected_login_fixture_response(&mut stream, &request);
+                        if thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while count: {err}")
+                            })
+                            .len()
+                            >= 3
+                        {
+                            break;
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("test server accept failed: {err}"),
+                }
+            }
+        });
+
+        TestAdminServer {
+            base_url: format!("http://{address}/admin/"),
+            requests,
+            handle: Some(handle),
+        }
+    }
+
+    fn spawn_rejected_login_redirect_fixture_server() -> TestAdminServer {
+        let listener =
+            TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| panic!("bind failed: {err}"));
+        listener
+            .set_nonblocking(true)
+            .unwrap_or_else(|err| panic!("set_nonblocking failed: {err}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|err| panic!("local_addr failed: {err}"));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let thread_requests = Arc::clone(&requests);
+
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_millis(250)))
+                            .unwrap_or_else(|err| panic!("set_read_timeout failed: {err}"));
+                        let mut buffer = [0_u8; 8192];
+                        let bytes = stream
+                            .read(&mut buffer)
+                            .unwrap_or_else(|err| panic!("test request read failed: {err}"));
+                        let request = String::from_utf8_lossy(&buffer[..bytes]).to_string();
+                        thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while push: {err}")
+                            })
+                            .push(request.clone());
+                        write_rejected_login_redirect_fixture_response(&mut stream, &request);
+                        if thread_requests
+                            .lock()
+                            .unwrap_or_else(|err| {
+                                panic!("test requests lock poisoned while count: {err}")
+                            })
+                            .len()
+                            >= 3
+                        {
+                            break;
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("test server accept failed: {err}"),
+                }
+            }
+        });
+
+        TestAdminServer {
+            base_url: format!("http://{address}/admin/"),
+            requests,
+            handle: Some(handle),
         }
     }
 
@@ -3912,6 +4340,144 @@ mod tests {
         stream
             .write_all(response.as_bytes())
             .unwrap_or_else(|err| panic!("test response write failed: {err}"));
+    }
+
+    fn write_auth_loss_retry_fixture_response(
+        stream: &mut std::net::TcpStream,
+        request: &str,
+        list_reads: &Arc<Mutex<usize>>,
+    ) {
+        let body = if request.starts_with("GET /admin/index.php?Page=Login&Action=Login ") {
+            r#"<form method="post" action="index.php?Page=Login&Action=Login">
+                <input type="hidden" name="csrf_token" value="fixture-csrf">
+                <input name="ss_username">
+                <input name="ss_password">
+              </form>"#
+                .to_string()
+        } else if request.starts_with("POST /admin/index.php?Page=Login&Action=Login ") {
+            "<html><body>logged in</body></html>".to_string()
+        } else if request.starts_with("GET /admin/index.php?Page=Lists ") {
+            let mut reads = list_reads
+                .lock()
+                .unwrap_or_else(|err| panic!("list reads lock poisoned: {err}"));
+            *reads += 1;
+            if *reads <= 2 {
+                r#"<form method="post" action="index.php?Page=Login&Action=Login">
+                    <input name="ss_username">
+                    <input name="ss_password">
+                  </form>"#
+                    .to_string()
+            } else {
+                "<html><body><a href=\"index.php?Page=Lists&Action=Edit&id=1\">List</a></body></html>"
+                    .to_string()
+            }
+        } else {
+            "<html><body>unexpected request</body></html>".to_string()
+        };
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .unwrap_or_else(|err| panic!("test response write failed: {err}"));
+    }
+
+    fn write_read_reauth_fixture_response(
+        stream: &mut std::net::TcpStream,
+        request: &str,
+        list_reads: &Arc<Mutex<usize>>,
+        settings_reads: &Arc<Mutex<usize>>,
+    ) {
+        let body = if request.starts_with("GET /admin/index.php?Page=Login&Action=Login ") {
+            r#"<form method="post" action="index.php?Page=Login&Action=Login">
+                <input type="hidden" name="csrf_token" value="fixture-csrf">
+                <input name="ss_username">
+                <input name="ss_password">
+              </form>"#
+                .to_string()
+        } else if request.starts_with("POST /admin/index.php?Page=Login&Action=Login ") {
+            "<html><body>logged in</body></html>".to_string()
+        } else if request.starts_with("GET /admin/index.php?Page=Lists ") {
+            let mut reads = list_reads
+                .lock()
+                .unwrap_or_else(|err| panic!("list reads lock poisoned: {err}"));
+            *reads += 1;
+            if *reads == 1 || *reads == 3 {
+                r#"<form method="post" action="index.php?Page=Login&Action=Login">
+                    <input name="ss_username">
+                    <input name="ss_password">
+                  </form>"#
+                    .to_string()
+            } else {
+                "<html><body><a href=\"index.php?Page=Lists&Action=Edit&id=1\">List</a></body></html>"
+                    .to_string()
+            }
+        } else if request.starts_with("GET /admin/index.php?Page=Settings&Tab=2 ") {
+            let mut reads = settings_reads
+                .lock()
+                .unwrap_or_else(|err| panic!("settings reads lock poisoned: {err}"));
+            *reads += 1;
+            if *reads == 1 {
+                r#"<form method="post" action="index.php?Page=Login&Action=Login">
+                    <input name="ss_username">
+                    <input name="ss_password">
+                  </form>"#
+                    .to_string()
+            } else {
+                r#"<form><input name="smtp_server" value="smtp.example.test"></form>"#.to_string()
+            }
+        } else {
+            "<html><body>unexpected request</body></html>".to_string()
+        };
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .unwrap_or_else(|err| panic!("test response write failed: {err}"));
+    }
+
+    fn write_rejected_login_fixture_response(stream: &mut std::net::TcpStream, request: &str) {
+        let body = if request.starts_with("GET /admin/index.php?Page=Login&Action=Login ")
+            || request.starts_with("POST /admin/index.php?Page=Login&Action=Login ")
+            || request.starts_with("GET /admin/index.php?Page=Lists ")
+        {
+            r#"<form method="post" action="index.php?Page=Login&Action=Login">
+                <input type="hidden" name="csrf_token" value="fixture-csrf">
+                <input name="ss_username">
+                <input name="ss_password">
+              </form>"#
+        } else {
+            "<html><body>unexpected request</body></html>"
+        };
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .unwrap_or_else(|err| panic!("test response write failed: {err}"));
+    }
+
+    fn write_rejected_login_redirect_fixture_response(
+        stream: &mut std::net::TcpStream,
+        request: &str,
+    ) {
+        if request.starts_with("POST /admin/index.php?Page=Login&Action=Login ") {
+            stream
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\nlocation: index.php?Page=Login&Action=Login\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                )
+                .unwrap_or_else(|err| panic!("test response write failed: {err}"));
+            return;
+        }
+
+        write_rejected_login_fixture_response(stream, request);
     }
 
     fn write_settings_inventory_fixture_response(stream: &mut std::net::TcpStream, request: &str) {
