@@ -227,7 +227,7 @@ impl LiveInterspireBackend {
     ) -> Result<ContactStateReport, InterspireError> {
         let email = normalize_exact_contact_state_email(&request.email)?;
         let xml = self.xml_client()?;
-        let html = self.html_client()?;
+        let html_configured = self.config.admin_html.is_configured();
         let mut xml_found_on_list = None;
         let mut xml_exact_search_found_on_list = false;
         let mut admin_html_found_on_list = None;
@@ -309,7 +309,8 @@ impl LiveInterspireBackend {
         }
 
         if xml_found_on_list != Some(true) {
-            if html.configured() {
+            if html_configured {
+                let html = self.html_client()?;
                 match html.contact_state_readback(&email, request.list_id) {
                     Ok(html_state) => {
                         admin_html_found_on_list = html_state.found_on_list;
@@ -342,7 +343,7 @@ impl LiveInterspireBackend {
         warnings.extend(outcome.warnings.iter().map(|value| (*value).to_string()));
         Ok(ContactStateReport {
             ok: true,
-            configured: xml.configured() || html.configured(),
+            configured: xml.configured() || html_configured,
             list_id: request.list_id,
             email_redacted: redact::redact_email(&email),
             email_hash: redact::email_hash(&email),
@@ -355,7 +356,7 @@ impl LiveInterspireBackend {
             verification_sources,
             warnings,
             evidence: Evidence {
-                source: contact_state_evidence_source(xml.configured(), html.configured()),
+                source: contact_state_evidence_source(xml.configured(), html_configured),
                 notes,
             },
         })

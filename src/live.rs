@@ -47,23 +47,63 @@ use crate::{
     xml_api::XmlApiClient,
     InterspireReadBackend,
 };
+use std::{
+    ops::{Deref, DerefMut},
+    sync::{Arc, Mutex, MutexGuard},
+};
 
 #[derive(Debug, Clone)]
 pub struct LiveInterspireBackend {
     config: InterspireServerConfig,
+    admin_html: Arc<Mutex<Option<AdminHtmlClient>>>,
 }
 
 impl LiveInterspireBackend {
     pub fn new(config: InterspireServerConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            admin_html: Arc::new(Mutex::new(None)),
+        }
     }
 
     fn xml_client(&self) -> Result<XmlApiClient, InterspireError> {
         XmlApiClient::new(self.config.xml.clone())
     }
 
-    fn html_client(&self) -> Result<AdminHtmlClient, InterspireError> {
-        AdminHtmlClient::new(self.config.admin_html.clone())
+    fn html_client(&self) -> Result<AdminHtmlSessionGuard<'_>, InterspireError> {
+        // Interspire's admin UI is session-oriented and repeated rapid logins
+        // can invalidate adjacent proof calls. Keep one serialized admin
+        // client per live backend so MCP tools reuse the same cookie jar and
+        // accidental parallel calls wait behind the same session.
+        let mut guard = self.admin_html.lock().map_err(|_| {
+            InterspireError::Http("admin HTML client session lock was poisoned".to_string())
+        })?;
+        if guard.is_none() {
+            *guard = Some(AdminHtmlClient::new(self.config.admin_html.clone())?);
+        }
+        Ok(AdminHtmlSessionGuard { guard })
+    }
+}
+
+pub(super) struct AdminHtmlSessionGuard<'a> {
+    guard: MutexGuard<'a, Option<AdminHtmlClient>>,
+}
+
+impl Deref for AdminHtmlSessionGuard<'_> {
+    type Target = AdminHtmlClient;
+
+    fn deref(&self) -> &Self::Target {
+        self.guard
+            .as_ref()
+            .expect("admin HTML client initialized before guard is returned")
+    }
+}
+
+impl DerefMut for AdminHtmlSessionGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.guard
+            .as_mut()
+            .expect("admin HTML client initialized before guard is returned")
     }
 }
 
@@ -385,5 +425,41 @@ impl InterspireReadBackend for LiveInterspireBackend {
         request: &AudienceHygieneExportStatusRequest,
     ) -> Result<AudienceHygieneExportReport, InterspireError> {
         self.audience_hygiene_export_status_impl(request)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AdminHtmlConfig, CloudflareAccessConfig, InterspireVersion};
+
+    #[test]
+    fn cloned_live_backend_reuses_one_lazy_admin_html_client() {
+        let backend = LiveInterspireBackend::new(InterspireServerConfig {
+            admin_html: AdminHtmlConfig {
+                version: InterspireVersion::Auto,
+                base_url: Some("https://example.test/admin/".to_string()),
+                username: Some("admin-user".to_string()),
+                password: Some("admin-password".to_string()),
+                cloudflare_access: CloudflareAccessConfig::default(),
+                enrich_limit: 25,
+            },
+            ..InterspireServerConfig::default()
+        });
+        let cloned = backend.clone();
+
+        assert!(Arc::ptr_eq(&backend.admin_html, &cloned.admin_html));
+        assert!(backend.admin_html.lock().expect("admin lock").is_none());
+
+        {
+            let html = backend.html_client().expect("lazy admin client");
+            assert!(html.configured());
+        }
+
+        assert!(cloned.admin_html.lock().expect("admin lock").is_some());
+        {
+            let html = cloned.html_client().expect("shared admin client");
+            assert!(html.configured());
+        }
     }
 }
