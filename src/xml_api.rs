@@ -13,7 +13,7 @@ use reqwest::{
     blocking::{Client, RequestBuilder},
     redirect::Policy,
 };
-use std::{thread, time::Duration};
+use std::{mem::ManuallyDrop, thread, time::Duration};
 
 const SHARDED_DOMAIN_PREFIX_STARTERS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 const MAX_SHARDED_DOMAIN_PREFIX_LEN: usize = 8;
@@ -35,7 +35,7 @@ pub struct SubscriberRecord {
 #[derive(Debug, Clone)]
 pub struct XmlApiClient {
     config: XmlApiConfig,
-    http: Client,
+    http: ManuallyDrop<Client>,
 }
 
 impl XmlApiClient {
@@ -45,7 +45,14 @@ impl XmlApiClient {
             .timeout(DEFAULT_XML_REQUEST_TIMEOUT)
             .build()
             .map_err(|err| InterspireError::Http(err.to_string()))?;
-        Ok(Self { config, http })
+        Ok(Self {
+            config,
+            // reqwest's blocking client owns a private Tokio runtime. MCP
+            // stdio hosts can drop clients while an async runtime is shutting
+            // down, so retain this process-local client rather than dropping
+            // that runtime from the wrong context.
+            http: ManuallyDrop::new(http),
+        })
     }
 
     pub fn configured(&self) -> bool {

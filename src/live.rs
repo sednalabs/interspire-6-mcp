@@ -47,23 +47,74 @@ use crate::{
     xml_api::XmlApiClient,
     InterspireReadBackend,
 };
+use std::{
+    ops::Deref,
+    sync::{Arc, Mutex, MutexGuard},
+};
 
 #[derive(Debug, Clone)]
 pub struct LiveInterspireBackend {
     config: InterspireServerConfig,
+    admin_html: Arc<Mutex<Option<AdminHtmlClient>>>,
+    xml_api: Arc<Mutex<Option<Arc<XmlApiClient>>>>,
+}
+
+struct AdminHtmlSessionGuard<'a> {
+    guard: MutexGuard<'a, Option<AdminHtmlClient>>,
+}
+
+impl Deref for AdminHtmlSessionGuard<'_> {
+    type Target = AdminHtmlClient;
+
+    fn deref(&self) -> &Self::Target {
+        self.guard
+            .as_ref()
+            .expect("admin HTML session guard always contains a client")
+    }
 }
 
 impl LiveInterspireBackend {
     pub fn new(config: InterspireServerConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            admin_html: Arc::new(Mutex::new(None)),
+            xml_api: Arc::new(Mutex::new(None)),
+        }
     }
 
-    fn xml_client(&self) -> Result<XmlApiClient, InterspireError> {
-        XmlApiClient::new(self.config.xml.clone())
+    fn xml_client(&self) -> Result<Arc<XmlApiClient>, InterspireError> {
+        // XML reads do not carry an Interspire admin cookie jar, so callers
+        // get a cloned Arc and release this lock before any network request.
+        // Keeping one process-local client avoids repeated blocking-runtime
+        // construction while still allowing long XML calls to run without
+        // blocking unrelated admin-session reads.
+        let mut guard = self
+            .xml_api
+            .lock()
+            .map_err(|_| InterspireError::Http("XML API client lock was poisoned".to_string()))?;
+        if guard.is_none() {
+            *guard = Some(Arc::new(XmlApiClient::new(self.config.xml.clone())?));
+        }
+        Ok(guard
+            .as_ref()
+            .expect("XML API client was initialized above")
+            .clone())
     }
 
-    fn html_client(&self) -> Result<AdminHtmlClient, InterspireError> {
-        AdminHtmlClient::new(self.config.admin_html.clone())
+    fn html_client(&self) -> Result<AdminHtmlSessionGuard<'_>, InterspireError> {
+        // Interspire's admin UI is session-oriented and repeated rapid logins
+        // can invalidate adjacent proof calls. Lazily create one serialized
+        // admin client per live backend so MCP startup/tool-listing does not
+        // touch the admin boundary, while actual admin tools reuse the same
+        // cookie jar and accidental parallel calls wait behind the same
+        // session.
+        let mut guard = self.admin_html.lock().map_err(|_| {
+            InterspireError::Http("admin HTML client session lock was poisoned".to_string())
+        })?;
+        if guard.is_none() {
+            *guard = Some(AdminHtmlClient::new(self.config.admin_html.clone())?);
+        }
+        Ok(AdminHtmlSessionGuard { guard })
     }
 }
 
@@ -385,5 +436,31 @@ impl InterspireReadBackend for LiveInterspireBackend {
         request: &AudienceHygieneExportStatusRequest,
     ) -> Result<AudienceHygieneExportReport, InterspireError> {
         self.audience_hygiene_export_status_impl(request)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_backend_clones_share_serialized_admin_client() {
+        let backend = LiveInterspireBackend::new(InterspireServerConfig::default());
+        let cloned = backend.clone();
+
+        assert!(Arc::ptr_eq(&backend.admin_html, &cloned.admin_html));
+        assert!(backend.admin_html.lock().unwrap().is_none());
+        assert!(backend.xml_api.lock().unwrap().is_none());
+
+        let guard = backend.html_client().expect("admin client lock");
+        assert!(backend.admin_html.try_lock().is_err());
+        assert!(cloned.admin_html.try_lock().is_err());
+        drop(guard);
+
+        assert!(cloned.html_client().is_ok());
+
+        let first_xml = backend.xml_client().expect("XML client");
+        let second_xml = cloned.xml_client().expect("shared XML client");
+        assert!(Arc::ptr_eq(&first_xml, &second_xml));
     }
 }
