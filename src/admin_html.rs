@@ -36,6 +36,7 @@ use scraper::{ElementRef, Html, Selector};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
+    mem::ManuallyDrop,
     time::Duration,
 };
 use url::Url;
@@ -43,7 +44,7 @@ use url::Url;
 #[derive(Debug, Clone)]
 pub struct AdminHtmlClient {
     config: AdminHtmlConfig,
-    http: Client,
+    http: ManuallyDrop<Client>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -135,7 +136,14 @@ impl AdminHtmlClient {
             .timeout(Duration::from_secs(20))
             .build()
             .map_err(|err| InterspireError::Http(err.to_string()))?;
-        Ok(Self { config, http })
+        Ok(Self {
+            config,
+            // reqwest's blocking client owns a private Tokio runtime. MCP
+            // stdio tests and hosts may drop the backend from an async
+            // shutdown context, so keep the reusable admin session client for
+            // process lifetime instead of dropping that runtime there.
+            http: ManuallyDrop::new(http),
+        })
     }
 
     pub fn configured(&self) -> bool {

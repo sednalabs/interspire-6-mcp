@@ -227,7 +227,7 @@ impl LiveInterspireBackend {
     ) -> Result<ContactStateReport, InterspireError> {
         let email = normalize_exact_contact_state_email(&request.email)?;
         let xml = self.xml_client()?;
-        let html = self.html_client()?;
+        let html_configured = self.config.admin_html.is_configured();
         let mut xml_found_on_list = None;
         let mut xml_exact_search_found_on_list = false;
         let mut admin_html_found_on_list = None;
@@ -309,16 +309,23 @@ impl LiveInterspireBackend {
         }
 
         if xml_found_on_list != Some(true) {
-            if html.configured() {
-                match html.contact_state_readback(&email, request.list_id) {
-                    Ok(html_state) => {
-                        admin_html_found_on_list = html_state.found_on_list;
-                        verification_sources.push("interspire_admin_html_exact_search".to_string());
-                        notes.extend(html_state.evidence_notes);
-                        warnings.extend(html_state.warnings);
-                    }
+            if html_configured {
+                match self.html_client() {
+                    Ok(html) => match html.contact_state_readback(&email, request.list_id) {
+                        Ok(html_state) => {
+                            admin_html_found_on_list = html_state.found_on_list;
+                            verification_sources
+                                .push("interspire_admin_html_exact_search".to_string());
+                            notes.extend(html_state.evidence_notes);
+                            warnings.extend(html_state.warnings);
+                        }
+                        Err(err) => warnings.push(format!(
+                            "admin HTML contact-state corroboration skipped: {}",
+                            redact::redact_sensitive_text(&err.to_string())
+                        )),
+                    },
                     Err(err) => warnings.push(format!(
-                        "admin HTML contact-state corroboration skipped: {}",
+                        "admin HTML contact-state session unavailable: {}",
                         redact::redact_sensitive_text(&err.to_string())
                     )),
                 }
@@ -342,7 +349,7 @@ impl LiveInterspireBackend {
         warnings.extend(outcome.warnings.iter().map(|value| (*value).to_string()));
         Ok(ContactStateReport {
             ok: true,
-            configured: xml.configured() || html.configured(),
+            configured: xml.configured() || html_configured,
             list_id: request.list_id,
             email_redacted: redact::redact_email(&email),
             email_hash: redact::email_hash(&email),
@@ -355,7 +362,7 @@ impl LiveInterspireBackend {
             verification_sources,
             warnings,
             evidence: Evidence {
-                source: contact_state_evidence_source(xml.configured(), html.configured()),
+                source: contact_state_evidence_source(xml.configured(), html_configured),
                 notes,
             },
         })
